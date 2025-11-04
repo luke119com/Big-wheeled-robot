@@ -41,9 +41,12 @@ void setup()
   // ppm_init(); //遥控器读取中断初始化
   ps2Init();
   motorInit();
-  CAN_Control();//使能关节电机
+  // CAN_Control();//使能关节电机
+  delay(1000);
+  enableMotor();
   // posInit();//重新设置零位
-  pixels.begin();//初始化RGB
+  // pixels.begin();//初始化RGB
+  delay(1000);
 }
 
 
@@ -64,7 +67,7 @@ void loop()
   // mapPPMToRobotControl();                                     // 处理遥控器数据 将其映射为机器人行为控制
   mapPs2ToRobotControl();
   // testdataprint();                                         // 测试数据打印 可以打印输出相关调节信息
-  ledFlush(pixels);                                        //RGB
+  // ledFlush(pixels);                                        //RGB
 } 
 
 // 测试数据打印函数 用于打印调试相关数据

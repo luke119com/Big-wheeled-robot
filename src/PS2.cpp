@@ -54,45 +54,67 @@ float normAxis(int intput,int dead,int center)
 
 }
 
+unsigned long lastPadTime = 0;
+unsigned long lastBalanceTime = 0;
+unsigned long lastShakeTime = 0;
+
 void mapPs2ToRobotControl()
 { 
-  // ps2x.read_gamepad(false, vibrate);
+  unsigned long now = millis();
+
   // if (ps2x.ButtonPressed(PSB_PAD_UP)) {
-  //   ZeparamremoteValue = min(290-(int)290, ZeparamremoteValue + 10);
-    // nowLed = LED_UP;
-  //   // Serial.println( ZeparamremoteValue);
-  // }
+  //   ZeparamremoteValue = min(ZeparamremoteValue + 10, 150);
+  //   if(nowLed!=KEEP_STEADY){
+  //   nowLed = LED_UP;
+  //   }
+  // } 
 
-  if (ps2x.ButtonPressed(PSB_PAD_UP)) {
-    ZeparamremoteValue = min(ZeparamremoteValue + 10, 150);
-    if(nowLed!=KEEP_STEADY){
-    nowLed = LED_UP;
-    }
-  }  
+  // if (ps2x.ButtonPressed(PSB_PAD_DOWN)) {
+  //   ZeparamremoteValue = max(ZeparamremoteValue - 10, 0);
+  //   if(nowLed!=KEEP_STEADY){
+  //   nowLed = LED_DOWN;
+  //   }
+  // }  
 
-  // if (ps2x.ButtonPressed(PSB_PAD_DOWN)){ 
-  //   ZeparamremoteValue = max(140-(int)290,ZeparamremoteValue - 10);
-    // nowLed = LED_DOWN;
-  //   // Serial.println( ZeparamremoteValue);
-  // }
+  if (ps2x.Button(PSB_PAD_UP) && now - lastPadTime > 200) {
+  ZeparamremoteValue = min(ZeparamremoteValue + 10, 150);
+  lastPadTime = now;
+  if (nowLed != KEEP_STEADY) nowLed = LED_UP;
+}
 
-  if (ps2x.ButtonPressed(PSB_PAD_DOWN)) {
-    ZeparamremoteValue = max(ZeparamremoteValue - 10, 0);
-    if(nowLed!=KEEP_STEADY){
-    nowLed = LED_DOWN;
-    }
-
-  }  
-
-
+if (ps2x.Button(PSB_PAD_DOWN) && now - lastPadTime > 200) {
+  ZeparamremoteValue = max(ZeparamremoteValue - 10, 0);
+  lastPadTime = now;
+  if (nowLed != KEEP_STEADY) nowLed = LED_DOWN;
+}
 
   if(jump_flag==0&&EH_rollflag ==0){
-  if (ps2x.ButtonPressed(PSB_PAD_RIGHT)) Shake_shoulder_vakue = min(Shake_shoulder_vakue + 3, 24);
-  if (ps2x.ButtonPressed(PSB_PAD_LEFT)) Shake_shoulder_vakue = max(Shake_shoulder_vakue - 3, -24);
+    if(ps2x.Button(PSB_PAD_RIGHT)&&now - lastShakeTime>200){
+      Shake_shoulder_vakue = min(Shake_shoulder_vakue + 3, 24);
+      lastShakeTime=now;
+    }
+  // if (ps2x.ButtonPressed(PSB_PAD_RIGHT)) Shake_shoulder_vakue = min(Shake_shoulder_vakue + 3, 24);
+    if(ps2x.Button(PSB_PAD_LEFT)&&now - lastShakeTime>200){
+      Shake_shoulder_vakue = max(Shake_shoulder_vakue - 3, -24);
+      lastShakeTime=now;
+    }    
+  // if (ps2x.ButtonPressed(PSB_PAD_LEFT)) Shake_shoulder_vakue = max(Shake_shoulder_vakue - 3, -24);
   }
 
-  if (ps2x.ButtonPressed(PSB_L1)) remoteBalanceOffset = remoteBalanceOffset + 0.2;
-  if (ps2x.ButtonPressed(PSB_L2)) remoteBalanceOffset = remoteBalanceOffset - 0.2;
+  // if (ps2x.ButtonPressed(PSB_L1)) remoteBalanceOffset = remoteBalanceOffset + 0.2;
+  // if (ps2x.ButtonPressed(PSB_L2)) remoteBalanceOffset = remoteBalanceOffset - 0.2;
+
+  if(ps2x.Button(PSB_L1)&&now-lastBalanceTime>100){
+    remoteBalanceOffset = remoteBalanceOffset + 0.2;
+    lastBalanceTime=now;
+  } 
+  
+  if(ps2x.Button(PSB_L2)&&now-lastBalanceTime>100) 
+  {
+    remoteBalanceOffset = remoteBalanceOffset - 0.2;
+    lastBalanceTime=now;  
+  }
+
   forwardBackward = normAxis(ps2x.Analog(PSS_RY),5,128)*4;
   steering = -normAxis(ps2x.Analog(PSS_LX),5,128)*6;
   // Serial.println(forwardBackward);

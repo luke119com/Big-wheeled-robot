@@ -34,10 +34,7 @@ extern float gyroX, gyroY, gyroZ;
 extern float balance_offset;
 extern int ZeparamremoteValue; //腿高变化
 extern float roll_EH;
-extern float motorPos1 ;
-extern float motorPos2 ;
-extern float motorPos3 ;
-extern float motorPos4 ;
+
 
 
 void jump_control();

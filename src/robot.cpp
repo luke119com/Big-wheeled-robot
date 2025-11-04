@@ -20,7 +20,7 @@ motorsparam motorsParam;
 
 float roll_kp = 0.0025, roll_kd = -0.007;  //机器人自稳Kp、Kd值
 
-float leftY = 140, rightY = 140;  //机器人Y轴方向腿部高度
+float leftY = 130, rightY = 150;  //机器人Y轴方向腿部高度
 float leftX = 60, rightX = 60;    //机器人X轴方向腿部高度
 float x1 = leftX, x2 = rightX, Y1 = leftY, y2 = rightY;
 float motorLeftFront, motorLeftRear, motorRightFront, motorRightRear;
@@ -214,24 +214,12 @@ void inverseKinematics()
   // motorLeftRear = (2.68 + 1.57 * 8) - (IKParam.betaLeft * 8);     // 2
   // motorLeftFront = (4.5 + 1.57 * 8) - (IKParam.alphaLeft * 8);   // 4
 
-  if(current_ts-prevTs>=3000000)
-  {
-    if(recardPos == false)
-  {
-    recordMotorStartPos();
-    recardPos =true;
-  }
-  }
-  if(recardPos==true)
-  {
-                // alphaRight
-  motorRightRear = -POS_OF_RR0DRGEE+(IKParam.alphaRight-PI/2);    // 1
-  motorRightFront = ((MOTOR_RF_OFFSET-POS_OF_RF0DRGEE)+(IKParam.betaRight)); // 3
-  // alphaLeft
-  motorLeftRear = MOTOR_LR_OFFSET -POS_OF_LR0DRGEE  + (IKParam.betaLeft );     // 2
-  motorLeftFront = -POS_OF_LF0DRGEE + (IKParam.alphaLeft-PI/2);   // 4
+  motorRightRear = (IKParam.alphaRight-PI/2);    // 1
+  motorRightFront = ((MOTOR_RF_OFFSET)+(IKParam.betaRight)); // 3
 
-  }
+  // alphaLeft
+  motorLeftRear = MOTOR_LR_OFFSET+(IKParam.betaLeft );     // 2
+  motorLeftFront =  (IKParam.alphaLeft-PI/2);   // 4
 
 }
 

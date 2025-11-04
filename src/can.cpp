@@ -38,27 +38,27 @@ void CAN_Control()
   // 左腿关节电机1 控制参数  pos正  MIT协议为左后腿
   LeftFronMITCtrlParam.pos = 1 * motorLeftFront; // 28 - motorLeftRear motorLeftFront
   LeftFronMITCtrlParam.vel = 0;
-  LeftFronMITCtrlParam.kp =17+Am_kp;
-  LeftFronMITCtrlParam.kd = 1.5;
+  LeftFronMITCtrlParam.kp =20+Am_kp;//18
+  LeftFronMITCtrlParam.kd = 2;//1.6
   LeftFronMITCtrlParam.tor = 0;
   // 左腿关节电机2 控制参数 pos负 控制升高降低  MIT协议为左前腿
   LeftRearMITCtrlParam.pos = 1 * motorLeftRear; //-23 + motorLeftFront
   LeftRearMITCtrlParam.vel = 0;
-  LeftRearMITCtrlParam.kp =17+Am_kp;
-  LeftRearMITCtrlParam.kd =1.5;
+  LeftRearMITCtrlParam.kp =20+Am_kp;//18
+  LeftRearMITCtrlParam.kd =2;//1.6
   LeftRearMITCtrlParam.tor = 0;
 
   // 右腿关节电机1 控制参数
   RightFronMITCtrlParam.pos = motorRightFront ;
   RightFronMITCtrlParam.vel = 0;
-  RightFronMITCtrlParam.kp = 20+Am_kp;
-  RightFronMITCtrlParam.kd =1.7;
+  RightFronMITCtrlParam.kp = 20+Am_kp;//20
+  RightFronMITCtrlParam.kd =2;//1.7
   RightFronMITCtrlParam.tor = 0;
   // 右腿关节电机2 控制参数
   RightRearMITCtrlParam.pos = motorRightRear;//motorRightRear
   RightRearMITCtrlParam.vel = 0;
-  RightRearMITCtrlParam.kp = 20+Am_kp;
-  RightRearMITCtrlParam.kd =1.7;
+  RightRearMITCtrlParam.kp = 20+Am_kp;//20
+  RightRearMITCtrlParam.kd =2;//1.7
   RightRearMITCtrlParam.tor = 0;
 
   uint32_t current_ts = micros();
@@ -125,7 +125,15 @@ void startMotor(int motorIndex)
 }
 
 
-
+void enableMotor()
+{
+  for(int i =0;i<4;i++){
+      Serial.println("...");
+      startMotor(motorIndex);           // 启动当前索引的电机
+      motorIndex++;                     // 准备启动下一个电机
+      delay(100);
+  }
+}
 
 void posInit()
 {
@@ -137,10 +145,3 @@ void posInit()
 
 }
 
-void recordMotorStartPos()
-{
-  motorPos1 = devicesState[0].pos;
-  motorPos2 = devicesState[1].pos;
-  motorPos3 = devicesState[2].pos;
-  motorPos4 = devicesState[3].pos;
-}

@@ -30,7 +30,7 @@ void setLedMode(LedMode nowled )
 void ledFlush(Adafruit_NeoPixel &pixels) {
   static uint32_t last = 0;
   uint32_t now = millis();
-  if (now - last < 40) return;   
+  if (now - last < 30) return;   
   last = now;
 
  
@@ -78,7 +78,7 @@ void ledFlush(Adafruit_NeoPixel &pixels) {
     } break;
 
     case KEEP_STEADY:
-      pixels.fill(pixels.Color(255, 0, 0));  
+      pixels.fill(pixels.Color(0, 120, 255));  
       break;
 
     case EXIT:

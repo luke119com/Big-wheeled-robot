@@ -11,6 +11,5 @@ extern float Am_kp;
 void CAN_Control();
 void startMotor(int motorIndex);
 void posInit();
-void recordMotorStartPos();
-
+void enableMotor();
 #endif
