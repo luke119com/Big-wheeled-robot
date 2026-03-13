@@ -17,6 +17,9 @@ motionControlParams LeftMotionControlParams;
 // 右腿相关运动学基本参数
 motionControlParams RightMotionControlParams;
 motorsparam motorsParam;
+float leg_balance_kp = 1.0f;   // small assist: mm per degree of pitch
+float leg_balance_kd = 0.01f;  // small assist: mm per deg/s of gyroY
+float leg_balance_limit = 10.0f;
 
 float roll_kp = 0.0025, roll_kd = -0.007;  //机器人自稳Kp、Kd值
 
@@ -232,8 +235,11 @@ void robot_control()
     Y1 = leftY + ZeparamremoteValue + EH_rollflag * roll_EH + jump_vlaue - Shake_shoulder_vakue;
     y2 = rightY + ZeparamremoteValue - EH_rollflag * roll_EH + jump_vlaue + Shake_shoulder_vakue;
 
-  x1 = leftX + -robot_kp * (-forwardBackward - (motor1_vel + (motor2_vel)) / 2) + -0.02 * gyroY ; //-0.02 * gyroY
-  x2 = rightX + robot_kp * (-forwardBackward - (motor1_vel + (motor2_vel)) / 2) + -0.02 * gyroY ; //-0.02 * gyroY
+  float leg_balance = leg_balance_kp * pitch + leg_balance_kd * gyroY;
+  leg_balance = constrainValue(leg_balance, -leg_balance_limit, leg_balance_limit);
+
+  x1 = leftX + -robot_kp * (-forwardBackward - (motor1_vel + (motor2_vel)) / 2) + -0.02 * gyroY + leg_balance; //-0.02 * gyroY
+  x2 = rightX + robot_kp * (-forwardBackward - (motor1_vel + (motor2_vel)) / 2) + -0.02 * gyroY + leg_balance; //-0.02 * gyroY
   // 限幅Y轴幅度 避免超限导致逆解出问题
   Y1 = constrainValue(Y1, 130, 380);
   y2 = constrainValue(y2, 130, 380);
