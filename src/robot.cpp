@@ -20,7 +20,7 @@ motorsparam motorsParam;
 
 float roll_kp = 0.0025, roll_kd = -0.007;  //机器人自稳Kp、Kd值
 
-float leftY = 130, rightY = 150;  //机器人Y轴方向腿部高度
+float leftY = 140, rightY = 140;  //机器人Y轴方向腿部高度
 float leftX = 60, rightX = 60;    //机器人X轴方向腿部高度
 float x1 = leftX, x2 = rightX, Y1 = leftY, y2 = rightY;
 float motorLeftFront, motorLeftRear, motorRightFront, motorRightRear;
@@ -35,12 +35,12 @@ float roll, pitch, yaw, init_pitch; //陀螺仪xyz轴值
 float gyroX, gyroY, gyroZ;//陀螺仪xyz轴加速度值
 float target_roll = 0.0;
 float steering = 0;
-float remoteBalanceOffset = 0;
+float remoteBalanceOffset = 5; // 大往前小往后
 uint8_t origin_pos_flag = 1;
 MIT devicesState[8];
 float robot_kp = 5.0;//3
 float jump_vlaue; //起跳高度
-float balance_offset = 2;
+float balance_offset = 0;
 float motorPos1 = 0;
 float motorPos2 = 0;
 float motorPos3 = 0;
