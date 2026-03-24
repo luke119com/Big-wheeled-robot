@@ -32,6 +32,7 @@ extern float motor1_vel, motor2_vel;
 extern float roll, pitch, yaw, init_pitch;
 extern float gyroX, gyroY, gyroZ;
 extern float balance_offset;
+extern bool endEffectorSineTestEnabled;
 extern int ZeparamremoteValue; //腿高变化
 extern float roll_EH;
 
@@ -40,6 +41,7 @@ extern float roll_EH;
 void jump_control();
 void inverseKinematics();
 void robot_control();
+void toggleEndEffectorSineTest();
 float constrainValue(float value, float minValue, float maxValue);
 void mapPPMToRobotControl();
 int mapJoystickValuerollzeparam(int inputValue);

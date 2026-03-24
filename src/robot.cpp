@@ -49,6 +49,43 @@ float motorPos2 = 0;
 float motorPos3 = 0;
 float motorPos4 = 0;
 bool recardPos = false;
+bool endEffectorSineTestEnabled = false;
+
+namespace {
+constexpr float kSinePathXAmplitude = 70.0f;
+constexpr float kSinePathYAmplitude = 70.0f;
+constexpr uint32_t kSinePathPeriodMs = 2400;
+
+bool captureSinePathBase = false;
+float sinePathBaseXLeft = 0.0f;
+float sinePathBaseXRight = 0.0f;
+float sinePathBaseYLeft = 0.0f;
+float sinePathBaseYRight = 0.0f;
+uint32_t sinePathStartMs = 0;
+
+void applyEndEffectorSinePath()
+{
+  uint32_t elapsed = millis() - sinePathStartMs;
+  float cycle = (elapsed % kSinePathPeriodMs) / static_cast<float>(kSinePathPeriodMs);
+  float travel = sinf(cycle * 2.0f * PI);
+  float dx = kSinePathXAmplitude * travel;
+  float dy = kSinePathYAmplitude * sinf(travel * PI);
+
+  x1 = sinePathBaseXLeft + dx;
+  x2 = sinePathBaseXRight + dx;
+  Y1 = sinePathBaseYLeft + dy;
+  y2 = sinePathBaseYRight + dy;
+}
+}
+
+void toggleEndEffectorSineTest()
+{
+  endEffectorSineTestEnabled = !endEffectorSineTestEnabled;
+  if (endEffectorSineTestEnabled) {
+    captureSinePathBase = true;
+    sinePathStartMs = millis();
+  }
+}
 
 // 用于获取电机初始位置函数
 void get_origin_pos()
@@ -232,14 +269,27 @@ void inverseKinematics()
 int Shake_shoulder_vakue = 0;
 void robot_control()
 {
-    Y1 = leftY + ZeparamremoteValue + EH_rollflag * roll_EH + jump_vlaue - Shake_shoulder_vakue;
-    y2 = rightY + ZeparamremoteValue - EH_rollflag * roll_EH + jump_vlaue + Shake_shoulder_vakue;
+  Y1 = leftY + ZeparamremoteValue + EH_rollflag * roll_EH + jump_vlaue - Shake_shoulder_vakue;
+  y2 = rightY + ZeparamremoteValue - EH_rollflag * roll_EH + jump_vlaue + Shake_shoulder_vakue;
 
   float leg_balance = leg_balance_kp * pitch + leg_balance_kd * gyroY;
   leg_balance = constrainValue(leg_balance, -leg_balance_limit, leg_balance_limit);
 
   x1 = leftX + -robot_kp * (-forwardBackward - (motor1_vel + (motor2_vel)) / 2) + -0.02 * gyroY + leg_balance; //-0.02 * gyroY
   x2 = rightX + robot_kp * (-forwardBackward - (motor1_vel + (motor2_vel)) / 2) + -0.02 * gyroY + leg_balance; //-0.02 * gyroY
+
+  if (captureSinePathBase) {
+    sinePathBaseXLeft = x1;
+    sinePathBaseXRight = x2;
+    sinePathBaseYLeft = Y1;
+    sinePathBaseYRight = y2;
+    sinePathStartMs = millis();
+    captureSinePathBase = false;
+  }
+
+  if (endEffectorSineTestEnabled) {
+    applyEndEffectorSinePath();
+  }
   // 限幅Y轴幅度 避免超限导致逆解出问题
   Y1 = constrainValue(Y1, 130, 380);
   y2 = constrainValue(y2, 130, 380);
