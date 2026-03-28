@@ -4,6 +4,12 @@
 // CAN_device_t CAN_cfg;   
 // uint32_t deviceID = 0x10;
 
+namespace {
+constexpr TickType_t kCanRxTimeoutTicks = 0;
+constexpr TickType_t kCanTxTimeoutTicks = 0;
+constexpr uint8_t kCanRxDrainLimit = 10;
+}
+
 
 void CANInit(){
     // CAN_cfg.speed = CAN_SPEED_1000KBPS;
@@ -43,19 +49,23 @@ void CANInit(){
 uint32_t recNum;
 void recCANMessage(){
     twai_message_t rxFrame;
-    if(twai_receive(&rxFrame,  pdMS_TO_TICKS(1)) == ESP_OK){
-        recNum++;
-        if(!rxFrame.extd){
-            if(!rxFrame.rtr){
-                uint8_t DLC = rxFrame.data_length_code;
-                uint8_t nodeID = rxFrame.identifier & 0x7F;
-                uint32_t funcID = rxFrame.identifier & 0x780;
-                // Serial.printf("%x,%x,%x,%x\n",DLC,nodeID,funcID,rxFrame.identifier);
-                if(funcID == HEARTBEAT_FUNC_ID){
-                    MITState_callback(nodeID, rxFrame.data);
+    for (uint8_t i = 0; i < kCanRxDrainLimit; ++i) {
+        if(twai_receive(&rxFrame, kCanRxTimeoutTicks) == ESP_OK){
+            recNum++;
+            if(!rxFrame.extd){
+                if(!rxFrame.rtr){
+                    uint8_t DLC = rxFrame.data_length_code;
+                    uint8_t nodeID = rxFrame.identifier & 0x7F;
+                    uint32_t funcID = rxFrame.identifier & 0x780;
+                    // Serial.printf("%x,%x,%x,%x\n",DLC,nodeID,funcID,rxFrame.identifier);
+                    if(funcID == HEARTBEAT_FUNC_ID){
+                        MITState_callback(nodeID, rxFrame.data);
 
+                    }
                 }
             }
+        } else {
+            break;
         }
     }
 }
@@ -98,7 +108,7 @@ void sendCANCommand(uint32_t nodeID, uint32_t msgID, uint8_t *data){
     }
   // Queue message for transmission
   //超时时间为1ms，pdMS_TO_TICKS(1000)
-  if (twai_transmit(&txFrame, pdMS_TO_TICKS(1000)) == ESP_OK) {
+  if (twai_transmit(&txFrame, kCanTxTimeoutTicks) == ESP_OK) {
     // printf("Message queued for transmission\n");
     sendNum++;
   } else {

@@ -57,6 +57,7 @@ float normAxis(int intput,int dead,int center)
 unsigned long lastPadTime = 0;
 unsigned long lastBalanceTime = 0;
 unsigned long lastShakeTime = 0;
+unsigned long lastPs2PollTime = 0;
 
 void mapPs2ToRobotControl()
 { 
@@ -123,8 +124,16 @@ if (ps2x.Button(PSB_PAD_DOWN) && now - lastPadTime > 200) {
 
 void PS2_switch()
 {
-  ps2x.read_gamepad(false, vibrate);
   uint32_t now = millis();
+  if (now - lastPs2PollTime < 4) {
+    return;
+  }
+  lastPs2PollTime = now;
+
+  if (!ps2x.read_gamepad(false, vibrate)) {
+    return;
+  }
+
   bool r2 = ps2x.Button(PSB_R2);
   bool r1 = ps2x.Button(PSB_R1);
 

@@ -5,7 +5,7 @@
 #include "CAN_comm.h"
 #include "robot.h"
 
-#define SEND_INTERVAL 1 // 限制发送频率，单位为毫秒
+#define SEND_INTERVAL 3 // 限制发送频率，单位为毫秒，避免主循环被 CAN 挤占
 extern float Am_kp;
 
 void CAN_Control();

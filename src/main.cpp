@@ -59,7 +59,7 @@ void loop()
   CAN_Control();                                              // CAN 关节电机控制函数
   // remote_switch();                                            // 遥控开关
   PS2_switch();
-  jump_control();                                          // 机器人跳跃控制
+  // jump_control();                                          // 机器人跳跃控制
   inverseKinematics();                                        // 运动学逆解
   robot_control();                                            // 机器人行为控制
   sendMotorTargets(up_start * wheel_motor1_target, up_start * wheel_motor2_target); // 发送控制轮毂电机的目标值
@@ -116,6 +116,6 @@ void IMUTask(void *pvParameters)
     if (gyroZ > -8 && gyroZ < 8) gyroZ = 0;
     roll = lowPassFilter(mpu6050.getAngleX(), roll, 0.05);
     gyroY = lowPassFilter(mpu6050.getGyroY(), gyroY, 0.005);
-
+    vTaskDelay(1);
   }
 }
