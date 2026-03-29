@@ -1,16 +1,22 @@
 #include "pid.h"
 #include <math.h>
 
-// PID参数
-float vel_kp = -0;//速度环
-float balance_kp = -0;//直立环Kp
-float balance_kd = 0;//直立环K
-float balance_ki = -0.0f;//直立环Ki(自动微调)
-int speed_limit = 5; //轮毂电机速度限制
+namespace {
+constexpr float kWheelOutputLimit = 8.0f;
+constexpr float kWheelOutputSlew = 60.0f;
+constexpr int kLowHeightSpeedLimit = 14;
+constexpr int kHighHeightSpeedLimit = 8;
+}
+
+float vel_kp = -0;
+float balance_kp = -0;
+float balance_kd = 0;
+float balance_ki = -0.0f;
+int speed_limit = 5;
 float motor1_target_vel = 0, motor2_target_vel = 0;
-float wheel_motor1_target = 0, wheel_motor2_target = 0; // 电机目标值
+float wheel_motor1_target = 0, wheel_motor2_target = 0;
 float clampToRange(float value, float minVal, float maxVal);
-// 底部轮子霍尔电机PID控制函数
+
 void wheel_control()
 {
   static uint32_t last_us = 0;
@@ -24,26 +30,24 @@ void wheel_control()
   if (dt < 0.001f) dt = 0.001f;
   if (dt > 0.02f) dt = 0.02f;
 
-  // Wheel speed loop
-  motor1_target_vel = (-vel_kp * ((forwardBackward/2 )  - (motor1_vel  + motor2_vel) / 2));
-  motor2_target_vel = (-vel_kp * ((forwardBackward/2 )  - (motor1_vel  + motor2_vel) / 2));
+  motor1_target_vel = (-vel_kp * ((forwardBackward / 2) - (motor1_vel + motor2_vel) / 2));
+  motor2_target_vel = (-vel_kp * ((forwardBackward / 2) - (motor1_vel + motor2_vel) / 2));
 
   float pitch_error1 = motor1_target_vel - pitch - balance_offset - remoteBalanceOffset;
   float pitch_error2 = motor2_target_vel - pitch - balance_offset - remoteBalanceOffset;
 
-  const float pitch_deadband = 0.15f; // deg
+  const float pitch_deadband = 0.15f;
   if (fabsf(pitch_error1) < pitch_deadband) pitch_error1 = 0.0f;
   if (fabsf(pitch_error2) < pitch_deadband) pitch_error2 = 0.0f;
 
   float gyroY_use = gyroY;
-  const float gyro_deadband = 0.6f; // deg/s
+  const float gyro_deadband = 0.6f;
   if (fabsf(gyroY_use) < gyro_deadband) gyroY_use = 0.0f;
 
-  // I-term only when nearly still to auto-trim balance
   bool allow_i = (fabsf(forwardBackward) < 0.1f) && (fabsf(steering) < 0.1f) && (fabsf(gyroY_use) < 6.0f);
   if (allow_i) {
     i_term += pitch_error1 * dt;
-    const float i_limit = 6.0f; // deg*s
+    const float i_limit = 6.0f;
     if (i_term > i_limit) i_term = i_limit;
     if (i_term < -i_limit) i_term = -i_limit;
   } else {
@@ -53,12 +57,10 @@ void wheel_control()
   float u1 = balance_kp * pitch_error1 + balance_kd * gyroY_use + balance_ki * i_term;
   float u2 = balance_kp * pitch_error2 + balance_kd * gyroY_use + balance_ki * i_term;
 
-  u1 = clampToRange(u1, -5, 5);
-  u2 = clampToRange(u2, -5, 5);
+  u1 = clampToRange(u1, -kWheelOutputLimit, kWheelOutputLimit);
+  u2 = clampToRange(u2, -kWheelOutputLimit, kWheelOutputLimit);
 
-  // Output slew limit to reduce oscillation
-  const float slew = 40.0f; // units per second
-  float max_delta = slew * dt;
+  float max_delta = kWheelOutputSlew * dt;
   u1 = clampToRange(u1, last_u1 - max_delta, last_u1 + max_delta);
   u2 = clampToRange(u2, last_u2 - max_delta, last_u2 + max_delta);
   last_u1 = u1;
@@ -71,76 +73,50 @@ void wheel_control()
   wheel_motor2_target = clampToRange(wheel_motor2_target, -speed_limit, speed_limit);
 }
 
-// //PID线性拟合函数
-// PIDValues  interpolatePID(int y_height) {
-//   if(Shake_shoulder == 0)
-//   {
-//       // 已知数据点
-//       float y0 = 0, y1 = 80, y2 = 150;
-//       PIDValues pid0 = {-0.55,-0.175, 0.060, 3.2};
-//       PIDValues pid1 = {-0.55,-0.168,0.057, 4.5};
-//       PIDValues pid2 = {-0.54,-0.155, 0.055, 6};
-//       PIDValues result;
-//       if (y_height <= y1) 
-//       {
-//           speed_limit = 5;
-//           float t = (y_height - y0) / (y1 - y0);
-//           vel_kp = pid0.linear_vel_kp + t * (pid1.linear_vel_kp - pid0.linear_vel_kp);
-//           balance_kp = pid0.linear_balance_kp + t * (pid1.linear_balance_kp - pid0.linear_balance_kp);
-//           balance_kd = pid0.linear_balance_kd + t * (pid1.linear_balance_kd - pid0.linear_balance_kd);
-//           robot_kp = pid0.linear_robot_kp + t * (pid1.linear_robot_kp - pid0.linear_robot_kp);
-//       } 
-//       else 
-//       {
-//           speed_limit = 3;
-//           float t = (y_height - y1) / (y2 - y1);
-//           vel_kp = pid1.linear_vel_kp + t * (pid2.linear_vel_kp - pid1.linear_vel_kp);
-//           balance_kp = pid1.linear_balance_kp + t * (pid2.linear_balance_kp - pid1.linear_balance_kp);
-//           balance_kd = pid1.linear_balance_kd + t * (pid2.linear_balance_kd - pid1.linear_balance_kd);
-//           robot_kp = pid1.linear_robot_kp + t * (pid2.linear_robot_kp - pid1.linear_robot_kp);
-//       }
-//       return result;
-//   }
-// }
+PIDValues interpolatePID(int y_height)
+{
+  PIDValues result = {vel_kp, balance_kp, balance_kd, robot_kp};
 
-
-
-//PID线性拟合函数
-PIDValues  interpolatePID(int y_height) {
-  if(Shake_shoulder == 0)
+  if (Shake_shoulder == 0)
   {
-      // 已知数据点
-      float y0 = 0, y1 = 80, y2 = 150;
-      PIDValues pid0 = {-0.55,-0.183, 0.055, 4};
-      PIDValues pid1 = {-0.55,-0.170,0.04, 4.7};
-      PIDValues pid2 = {-0.54,-0.158, 0.042, 6.2};
-      float ki0 = -0.003f, ki1 = -0.004f, ki2 = -0.0055f;
-      PIDValues result;
-      if (y_height <= y1) 
-      {
-          speed_limit = 5;
-          float t = (y_height - y0) / (y1 - y0);
-          vel_kp = pid0.linear_vel_kp + t * (pid1.linear_vel_kp - pid0.linear_vel_kp);
-          balance_kp = pid0.linear_balance_kp + t * (pid1.linear_balance_kp - pid0.linear_balance_kp);
-          balance_kd = pid0.linear_balance_kd + t * (pid1.linear_balance_kd - pid0.linear_balance_kd);
-          robot_kp = pid0.linear_robot_kp + t * (pid1.linear_robot_kp - pid0.linear_robot_kp);
-          balance_ki = ki0 + t * (ki1 - ki0);
-      } 
-      else 
-      {
-          speed_limit = 3;
-          float t = (y_height - y1) / (y2 - y1);
-          vel_kp = pid1.linear_vel_kp + t * (pid2.linear_vel_kp - pid1.linear_vel_kp);
-          balance_kp = pid1.linear_balance_kp + t * (pid2.linear_balance_kp - pid1.linear_balance_kp);
-          balance_kd = pid1.linear_balance_kd + t * (pid2.linear_balance_kd - pid1.linear_balance_kd);
-          robot_kp = pid1.linear_robot_kp + t * (pid2.linear_robot_kp - pid1.linear_robot_kp);
-          balance_ki = ki1 + t * (ki2 - ki1);
-      }
-      return result;
+    float y0 = 0;
+    float y1 = 80;
+    float y2 = 150;
+    PIDValues pid0 = {-0.55f, -0.183f, 0.055f, 4.0f};
+    PIDValues pid1 = {-0.55f, -0.170f, 0.04f, 4.7f};
+    PIDValues pid2 = {-0.54f, -0.158f, 0.042f, 6.2f};
+    float ki0 = -0.003f, ki1 = -0.004f, ki2 = -0.0055f;
+
+    if (y_height <= y1)
+    {
+      speed_limit = kLowHeightSpeedLimit;
+      float t = (y_height - y0) / (y1 - y0);
+      vel_kp = pid0.linear_vel_kp + t * (pid1.linear_vel_kp - pid0.linear_vel_kp);
+      balance_kp = pid0.linear_balance_kp + t * (pid1.linear_balance_kp - pid0.linear_balance_kp);
+      balance_kd = pid0.linear_balance_kd + t * (pid1.linear_balance_kd - pid0.linear_balance_kd);
+      robot_kp = pid0.linear_robot_kp + t * (pid1.linear_robot_kp - pid0.linear_robot_kp);
+      balance_ki = ki0 + t * (ki1 - ki0);
+    }
+    else
+    {
+      speed_limit = kHighHeightSpeedLimit;
+      float t = (y_height - y1) / (y2 - y1);
+      vel_kp = pid1.linear_vel_kp + t * (pid2.linear_vel_kp - pid1.linear_vel_kp);
+      balance_kp = pid1.linear_balance_kp + t * (pid2.linear_balance_kp - pid1.linear_balance_kp);
+      balance_kd = pid1.linear_balance_kd + t * (pid2.linear_balance_kd - pid1.linear_balance_kd);
+      robot_kp = pid1.linear_robot_kp + t * (pid2.linear_robot_kp - pid1.linear_robot_kp);
+      balance_ki = ki1 + t * (ki2 - ki1);
+    }
+
+    result.linear_vel_kp = vel_kp;
+    result.linear_balance_kp = balance_kp;
+    result.linear_balance_kd = balance_kd;
+    result.linear_robot_kp = robot_kp;
   }
+
+  return result;
 }
 
-//PID串口调参函数
 String serialReceiveUserCommand()
 {
   static String received_chars;
@@ -154,30 +130,30 @@ String serialReceiveUserCommand()
       command = received_chars;
       int commaPosition = command.indexOf(',');
       int newlinePosition = command.indexOf('\n');
-      if (commaPosition != -1 && newlinePosition != -1) //给的第一个值
+      if (commaPosition != -1 && newlinePosition != -1)
       {
         String firstParam = command.substring(0, commaPosition);
-        vel_kp = firstParam.toDouble(); //速度环Kp
+        vel_kp = firstParam.toDouble();
         Serial.print("vel_kp:");
         Serial.println(vel_kp);
 
         String secondParamStr = command.substring(commaPosition + 1, newlinePosition);
         int secondCommaPosition = secondParamStr.indexOf(',');
-        if (secondCommaPosition != -1) //如果给三个值
+        if (secondCommaPosition != -1)
         {
-          balance_kp = secondParamStr.substring(0, secondCommaPosition).toDouble();//直立环Kp
-          balance_kd = secondParamStr.substring(secondCommaPosition + 1).toDouble();//直立环Kd
+          balance_kp = secondParamStr.substring(0, secondCommaPosition).toDouble();
+          balance_kd = secondParamStr.substring(secondCommaPosition + 1).toDouble();
         }
-        else //如果只给两个值
+        else
         {
           robot_kp = secondParamStr.toDouble();
         }
         Serial.print("balance_kp:");
-        Serial.println(balance_kp,3);
+        Serial.println(balance_kp, 3);
         Serial.print("balance_kd:");
-        Serial.println(balance_kd,3);
+        Serial.println(balance_kd, 3);
         Serial.print("robot_kp:");
-        Serial.println(robot_kp,3);
+        Serial.println(robot_kp, 3);
       }
       received_chars = "";
     }
@@ -185,7 +161,6 @@ String serialReceiveUserCommand()
   return command;
 }
 
-// 限幅函数
 float clampToRange(float value, float minVal, float maxVal)
 {
   if (value < minVal)
@@ -194,4 +169,3 @@ float clampToRange(float value, float minVal, float maxVal)
     return maxVal;
   return value;
 }
-

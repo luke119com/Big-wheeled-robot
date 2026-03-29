@@ -1,5 +1,9 @@
 #include"PS2.h"
 
+namespace {
+constexpr float kPs2ForwardScale = 5.0f;
+}
+
 int error = -1;
 byte type = 0;
 byte vibrate = 0;
@@ -60,7 +64,7 @@ unsigned long lastShakeTime = 0;
 unsigned long lastPs2PollTime = 0;
 
 void mapPs2ToRobotControl()
-{ 
+{
   unsigned long now = millis();
 
   // if (ps2x.ButtonPressed(PSB_PAD_UP)) {
@@ -68,14 +72,14 @@ void mapPs2ToRobotControl()
   //   if(nowLed!=KEEP_STEADY){
   //   nowLed = LED_UP;
   //   }
-  // } 
+  // }
 
   // if (ps2x.ButtonPressed(PSB_PAD_DOWN)) {
   //   ZeparamremoteValue = max(ZeparamremoteValue - 10, 0);
   //   if(nowLed!=KEEP_STEADY){
   //   nowLed = LED_DOWN;
   //   }
-  // }  
+  // }
 
   if (ps2x.Button(PSB_PAD_UP) && now - lastPadTime > 200) {
   ZeparamremoteValue = min(ZeparamremoteValue + 10, 150);
@@ -98,7 +102,7 @@ if (ps2x.Button(PSB_PAD_DOWN) && now - lastPadTime > 200) {
     if(ps2x.Button(PSB_PAD_LEFT)&&now - lastShakeTime>200){
       Shake_shoulder_vakue = max(Shake_shoulder_vakue - 3, -24);
       lastShakeTime=now;
-    }    
+    }
   // if (ps2x.ButtonPressed(PSB_PAD_LEFT)) Shake_shoulder_vakue = max(Shake_shoulder_vakue - 3, -24);
   }
 
@@ -108,15 +112,15 @@ if (ps2x.Button(PSB_PAD_DOWN) && now - lastPadTime > 200) {
   if(ps2x.Button(PSB_L1)&&now-lastBalanceTime>100){
     remoteBalanceOffset = remoteBalanceOffset + 0.2;
     lastBalanceTime=now;
-  } 
-  
-  if(ps2x.Button(PSB_L2)&&now-lastBalanceTime>100) 
-  {
-    remoteBalanceOffset = remoteBalanceOffset - 0.2;
-    lastBalanceTime=now;  
   }
 
-  forwardBackward = normAxis(ps2x.Analog(PSS_RY),5,128)*4;
+  if(ps2x.Button(PSB_L2)&&now-lastBalanceTime>100)
+  {
+    remoteBalanceOffset = remoteBalanceOffset - 0.2;
+    lastBalanceTime=now;
+  }
+
+  forwardBackward = normAxis(ps2x.Analog(PSS_RY),5,128)*kPs2ForwardScale;
   steering = -normAxis(ps2x.Analog(PSS_LX),5,128)*6;
   // Serial.println(forwardBackward);
   // delay(1);
@@ -144,12 +148,12 @@ void PS2_switch()
     r2_long_fired = false;
   }
   if (!r2_long_fired && (now - r2_press_ts >= R2_LONG_MS)) {
-    r2_long_fired = true;        // 长按触发一次
-    // Serial.println(" 起跳");
+    r2_long_fired = true;        // 闀挎寜瑙﹀彂涓€娆?
+    // Serial.println(" 璧疯烦");
     jump_flag=1;
   }
   }else{
-    // Serial.println(" 不起跳");
+    // Serial.println(" 涓嶈捣璺?);
     jump_flag=0;
   }
   r2_prev = r2;
@@ -161,44 +165,44 @@ void PS2_switch()
   }
 
   if (!r1_long_fired && (now - r1_press_ts >= R1_LONG_MS)) {
-    r1_long_fired = true;        // 长按触发一次
+    r1_long_fired = true;        // 闀挎寜瑙﹀彂涓€娆?
     if(EH_rollflag==0){
-      // Serial.println(" 自稳开启且灯亮");
+      // Serial.println(" 鑷ǔ寮€鍚笖鐏寒");
       EH_rollflag=1;
       nowLed =KEEP_STEADY;
     }else{
       EH_rollflag=0;
       nowLed =EXIT;
-      // Serial.println(" 自稳关闭且关灯");
+      // Serial.println(" 鑷ǔ鍏抽棴涓斿叧鐏?);
     }
   }
   }
   r1_prev = r1;
 
-  if(ps2x.ButtonPressed(PSB_TRIANGLE))//使能轮毂
+  if(ps2x.ButtonPressed(PSB_TRIANGLE))//浣胯兘杞瘋
   {
     up_start = 1;
-    // Serial.println("轮毂启动");
+    // Serial.println("杞瘋鍚姩");
   }
-  if(ps2x.ButtonPressed(PSB_CROSS))//失能轮毂
+  if(ps2x.ButtonPressed(PSB_CROSS))//澶辫兘杞瘋
   {
     up_start = 0;
-    // Serial.println(" 轮毂关闭");
+    // Serial.println(" 杞瘋鍏抽棴");
   }
 
   if (ps2x.ButtonPressed(PSB_SQUARE)) {
     if(ledSwitch==false){
       ledSwitch=true;
-      // Serial.println(" 开灯");
+      // Serial.println(" 寮€鐏?);
     }else{
       ledSwitch=false;
-      // Serial.println(" 关灯");
-    } 
+      // Serial.println(" 鍏崇伅");
+    }
   }
 
   if(ps2x.ButtonPressed(PSB_CIRCLE)){
     Shake_shoulder_vakue=0;
-    // Serial.println("高度回正");
+    // Serial.println("楂樺害鍥炴");
   }
 
 }
