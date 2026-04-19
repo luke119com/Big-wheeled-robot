@@ -45,7 +45,7 @@ void setup()
       NULL,
       1,
       NULL,
-      0);
+      1);
 
   mpu6050.begin();
   Open_thread_function();
