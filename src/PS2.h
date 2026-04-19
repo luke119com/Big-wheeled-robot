@@ -18,6 +18,7 @@
 void mapPs2ToRobotControl();
 void ps2Init();
 void PS2_switch();
+bool ps2IsConnected();
 
 
 #endif

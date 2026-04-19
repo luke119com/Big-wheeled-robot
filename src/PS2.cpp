@@ -4,6 +4,7 @@ int error = -1;
 byte type = 0;
 byte vibrate = 0;
 int tryNum = 1;
+bool ps2Connected = false;
 uint32_t R2_LONG_MS = 1500;
 uint32_t r2_press_ts = 0;
 bool r2_prev = false;
@@ -16,13 +17,16 @@ PS2X ps2x;
 
 void ps2Init()
 {
-    while (error != 0) {
-    delay(1000);// 1 second wait
-    //setup pins and settings: GamePad(clock, command, attention, data, Pressures?, Rumble?) check for error
-    error = ps2x.config_gamepad(PS2_CLK, PS2_CMD, PS2_SEL, PS2_DAT, pressures, rumble);
-    Serial.print("#try config ");
-    Serial.println(tryNum);
-    tryNum ++;
+  error = ps2x.config_gamepad(PS2_CLK, PS2_CMD, PS2_SEL, PS2_DAT, pressures, rumble);
+  Serial.print("#try config ");
+  Serial.println(tryNum);
+  tryNum++;
+
+  ps2Connected = (error == 0);
+  if (!ps2Connected)
+  {
+    Serial.println("PS2 controller not detected. System will continue and retry in loop.");
+    return;
   }
 
   type = ps2x.readType();
@@ -43,6 +47,11 @@ void ps2Init()
 
 }
 
+bool ps2IsConnected()
+{
+  return ps2Connected;
+}
+
 
 float normAxis(int intput,int dead,int center)
 {
@@ -58,12 +67,13 @@ unsigned long lastPadTime = 0;
 unsigned long lastBalanceTime = 0;
 unsigned long lastShakeTime = 0;
 unsigned long lastPs2PollTime = 0;
+unsigned long lastPs2ReconnectAttempt = 0;
 
 void mapPs2ToRobotControl()
 { 
   unsigned long now = millis();
 
-  if (serialFootPoseMode)
+  if (serialFootPoseMode || !ps2Connected)
   {
     forwardBackward = 0;
     steering = 0;
@@ -132,6 +142,17 @@ if (ps2x.Button(PSB_PAD_DOWN) && now - lastPadTime > 200) {
 void PS2_switch()
 {
   uint32_t now = millis();
+
+  if (!ps2Connected)
+  {
+    if (now - lastPs2ReconnectAttempt >= 3000)
+    {
+      lastPs2ReconnectAttempt = now;
+      ps2Init();
+    }
+    return;
+  }
+
   if (now - lastPs2PollTime < 4) {
     return;
   }
