@@ -21,6 +21,9 @@ extern float steering ;
 extern float remoteBalanceOffset;
 extern int Shake_shoulder_vakue;
 extern float x1 , x2, Y1 , y2 ;
+extern bool serialFootPoseMode;
+extern float serialLeftTargetX, serialLeftTargetY;
+extern float serialRightTargetX, serialRightTargetY;
 extern float leftY , rightY ;
 extern float leftX , rightX ;
 extern float motorLeftFront, motorLeftRear, motorRightFront, motorRightRear;
@@ -48,6 +51,9 @@ float mapJoystickValueInt(int inputValue);
 float mapJoystickValuesteering(int inputValue);
 int trot(int inputValue);
 void get_origin_pos();
+void setSerialFootPoseTargets(float leftTargetX, float leftTargetY, float rightTargetX, float rightTargetY);
+void setSerialFootPoseMode(bool enabled);
+bool validateSerialFootPoseTargets(float leftTargetX, float leftTargetY, float rightTargetX, float rightTargetY);
 
 
 #endif

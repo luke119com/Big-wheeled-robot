@@ -63,6 +63,13 @@ void mapPs2ToRobotControl()
 { 
   unsigned long now = millis();
 
+  if (serialFootPoseMode)
+  {
+    forwardBackward = 0;
+    steering = 0;
+    return;
+  }
+
   // if (ps2x.ButtonPressed(PSB_PAD_UP)) {
   //   ZeparamremoteValue = min(ZeparamremoteValue + 10, 150);
   //   if(nowLed!=KEEP_STEADY){

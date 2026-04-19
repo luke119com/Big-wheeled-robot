@@ -23,9 +23,14 @@ float leg_balance_limit = 10.0f;
 
 float roll_kp = 0.0025, roll_kd = -0.007;  //机器人自稳Kp、Kd值
 
-float leftY = 165, rightY = 145;  //机器人Y轴方向腿部高度
+float leftY = 300, rightY = 300;  //机器人Y轴方向腿部高度
 float leftX = 60, rightX = 60;    //机器人X轴方向腿部高度
 float x1 = leftX, x2 = rightX, Y1 = leftY, y2 = rightY;
+bool serialFootPoseMode = false;
+float serialLeftTargetX = 60;
+float serialLeftTargetY = 165;
+float serialRightTargetX = 60;
+float serialRightTargetY = 145;
 float motorLeftFront, motorLeftRear, motorRightFront, motorRightRear;
 int ZeparamremoteValue = 0;
 float roll_EH;
@@ -51,6 +56,60 @@ float motorPos4 = 0;
 bool recardPos = false;
 
 // 用于获取电机初始位置函数
+static bool legPoseReachable(float x, float y)
+{
+  float alphaTerm = x * x + y * y + L1 * L1 - L2 * L2;
+  float betaTerm = (x - L5) * (x - L5) + L4 * L4 + y * y - L3 * L3;
+  float alphaDisc = (2.0f * x * L1) * (2.0f * x * L1) + (2.0f * y * L1) * (2.0f * y * L1) - alphaTerm * alphaTerm;
+  float betaDisc = (2.0f * L4 * (x - L5)) * (2.0f * L4 * (x - L5)) + (2.0f * L4 * y) * (2.0f * L4 * y) - betaTerm * betaTerm;
+  return alphaDisc >= -1e-3f && betaDisc >= -1e-3f;
+}
+
+void setSerialFootPoseTargets(float leftTargetX, float leftTargetY, float rightTargetX, float rightTargetY)
+{
+  serialLeftTargetX = leftTargetX;
+  serialLeftTargetY = leftTargetY;
+  serialRightTargetX = rightTargetX;
+  serialRightTargetY = rightTargetY;
+}
+
+void setSerialFootPoseMode(bool enabled)
+{
+  bool wasEnabled = serialFootPoseMode;
+  serialFootPoseMode = enabled;
+  if (enabled)
+  {
+    forwardBackward = 0;
+    steering = 0;
+    wheel_motor1_target = 0;
+    wheel_motor2_target = 0;
+  }
+  else if (wasEnabled)
+  {
+    // Keep the last serial IK pose as the new nominal stance after leaving serial mode.
+    leftX = serialLeftTargetX;
+    leftY = serialLeftTargetY;
+    rightX = serialRightTargetX;
+    rightY = serialRightTargetY;
+    x1 = leftX;
+    Y1 = leftY;
+    x2 = rightX;
+    y2 = rightY;
+    ZeparamremoteValue = 0;
+    Shake_shoulder_vakue = 0;
+    jump_vlaue = 0;
+    forwardBackward = 0;
+    steering = 0;
+    wheel_motor1_target = 0;
+    wheel_motor2_target = 0;
+  }
+}
+
+bool validateSerialFootPoseTargets(float leftTargetX, float leftTargetY, float rightTargetX, float rightTargetY)
+{
+  return legPoseReachable(leftTargetX, leftTargetY) && legPoseReachable(rightTargetX, rightTargetY);
+}
+
 void get_origin_pos()
 {
   if (origin_pos_flag == 1)
@@ -162,13 +221,15 @@ void inverseKinematics()
   float eRight = 2 * L4 * y2;
   float fRight = ((x2 - L5) * (x2 - L5) + L4 * L4 + y2 * y2 - L3 * L3);
 
-  IKParam.alphaRight = 2 * atan((bRight + sqrt((aRight * aRight) + (bRight * bRight) - (cRight * cRight))) / (aRight + cRight));
-  IKParam.betaRight = 2 * atan((eRight - sqrt((dRight * dRight) + eRight * eRight - (fRight * fRight))) / (dRight + fRight));
+  float rightAlphaDisc = safe_sqrt((aRight * aRight) + (bRight * bRight) - (cRight * cRight));
+  float rightBetaDisc = safe_sqrt((dRight * dRight) + eRight * eRight - (fRight * fRight));
+  IKParam.alphaRight = 2 * atan(safe_div(bRight + rightAlphaDisc, aRight + cRight));
+  IKParam.betaRight = 2 * atan(safe_div(eRight - rightBetaDisc, dRight + fRight));
 
-  alpha1 = 2 * atan((bRight + sqrt((aRight * aRight) + (bRight * bRight) - (cRight * cRight))) / (aRight + cRight));
-  alpha2 = 2 * atan((bRight - sqrt((aRight * aRight) + (bRight * bRight) - (cRight * cRight))) / (aRight + cRight));
-  beta1 = 2 * atan((eRight + sqrt((dRight * dRight) + eRight * eRight - (fRight * fRight))) / (dRight + fRight));
-  beta2 = 2 * atan((eRight - sqrt((dRight * dRight) + eRight * eRight - (fRight * fRight))) / (dRight + fRight));
+  alpha1 = 2 * atan(safe_div(bRight + rightAlphaDisc, aRight + cRight));
+  alpha2 = 2 * atan(safe_div(bRight - rightAlphaDisc, aRight + cRight));
+  beta1 = 2 * atan(safe_div(eRight + rightBetaDisc, dRight + fRight));
+  beta2 = 2 * atan(safe_div(eRight - rightBetaDisc, dRight + fRight));
 
   alpha1 = (alpha1 >= 0) ? alpha1 : (alpha1 + 2 * PI);
   alpha2 = (alpha2 >= 0) ? alpha2 : (alpha2 + 2 * PI);
@@ -192,10 +253,12 @@ void inverseKinematics()
   float fLeft = ((x1 - L5) * (x1 - L5) + L4 * L4 + Y1 * Y1 - L3 * L3);
 
   // alpha的计算
-  alpha1 = 2 * atan((bLeft + sqrt((aLeft * aLeft) + (bLeft * bLeft) - (cLeft * cLeft))) / (aLeft + cLeft));
-  alpha2 = 2 * atan((bLeft - sqrt((aLeft * aLeft) + (bLeft * bLeft) - (cLeft * cLeft))) / (aLeft + cLeft));
-  beta1 = 2 * atan((eLeft + sqrt((dLeft * dLeft) + eLeft * eLeft - (fLeft * fLeft))) / (dLeft + fLeft));
-  beta2 = 2 * atan((eLeft - sqrt((dLeft * dLeft) + eLeft * eLeft - (fLeft * fLeft))) / (dLeft + fLeft));
+  float leftAlphaDisc = safe_sqrt((aLeft * aLeft) + (bLeft * bLeft) - (cLeft * cLeft));
+  float leftBetaDisc = safe_sqrt((dLeft * dLeft) + eLeft * eLeft - (fLeft * fLeft));
+  alpha1 = 2 * atan(safe_div(bLeft + leftAlphaDisc, aLeft + cLeft));
+  alpha2 = 2 * atan(safe_div(bLeft - leftAlphaDisc, aLeft + cLeft));
+  beta1 = 2 * atan(safe_div(eLeft + leftBetaDisc, dLeft + fLeft));
+  beta2 = 2 * atan(safe_div(eLeft - leftBetaDisc, dLeft + fLeft));
 
   // 角度解算范围限制
   alpha1 = (alpha1 >= 0) ? alpha1 : (alpha1 + 2 * PI);
@@ -232,6 +295,19 @@ void inverseKinematics()
 int Shake_shoulder_vakue = 0;
 void robot_control()
 {
+    if (serialFootPoseMode)
+    {
+      x1 = serialLeftTargetX;
+      Y1 = serialLeftTargetY;
+      x2 = serialRightTargetX;
+      y2 = serialRightTargetY;
+      forwardBackward = 0;
+      steering = 0;
+      wheel_motor1_target = 0;
+      wheel_motor2_target = 0;
+      return;
+    }
+
     Y1 = leftY + ZeparamremoteValue + EH_rollflag * roll_EH + jump_vlaue - Shake_shoulder_vakue;
     y2 = rightY + ZeparamremoteValue - EH_rollflag * roll_EH + jump_vlaue + Shake_shoulder_vakue;
 

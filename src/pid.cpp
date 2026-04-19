@@ -140,6 +140,177 @@ PIDValues  interpolatePID(int y_height) {
   }
 }
 
+static bool parseFloatList(const String &input, float *values, int expectedCount)
+{
+  int start = 0;
+  for (int i = 0; i < expectedCount; ++i)
+  {
+    int commaPos = input.indexOf(',', start);
+    String token = (commaPos == -1) ? input.substring(start) : input.substring(start, commaPos);
+    token.trim();
+    if (token.length() == 0)
+    {
+      return false;
+    }
+    values[i] = token.toFloat();
+    if (commaPos == -1)
+    {
+      return i == expectedCount - 1;
+    }
+    start = commaPos + 1;
+  }
+  return input.indexOf(',', start) == -1;
+}
+
+static void printFootPoseStatus()
+{
+  Serial.print("ik_mode:");
+  Serial.println(serialFootPoseMode ? "on" : "off");
+  Serial.print("ik_target_left:");
+  Serial.print(serialLeftTargetX, 2);
+  Serial.print(",");
+  Serial.println(serialLeftTargetY, 2);
+  Serial.print("ik_target_right:");
+  Serial.print(serialRightTargetX, 2);
+  Serial.print(",");
+  Serial.println(serialRightTargetY, 2);
+  Serial.print("ik_current_left:");
+  Serial.print(x1, 2);
+  Serial.print(",");
+  Serial.println(Y1, 2);
+  Serial.print("ik_current_right:");
+  Serial.print(x2, 2);
+  Serial.print(",");
+  Serial.println(y2, 2);
+}
+
+static bool handleFootPoseCommand(String command)
+{
+  command.trim();
+  if (command.length() == 0)
+  {
+    return true;
+  }
+
+  int commaPos = command.indexOf(',');
+  String keyword = (commaPos == -1) ? command : command.substring(0, commaPos);
+  String payload = (commaPos == -1) ? "" : command.substring(commaPos + 1);
+  keyword.trim();
+  payload.trim();
+  keyword.toLowerCase();
+
+  if (keyword == "ik" || keyword == "ikset")
+  {
+    float values[4];
+    if (!parseFloatList(payload, values, 4))
+    {
+      Serial.println("ik_cmd_error: use ik,leftX,leftY,rightX,rightY");
+      return true;
+    }
+
+    if (!validateSerialFootPoseTargets(values[0], values[1], values[2], values[3]))
+    {
+      Serial.println("ik_target_error: target out of reachable workspace");
+      return true;
+    }
+
+    setSerialFootPoseTargets(values[0], values[1], values[2], values[3]);
+    if (keyword == "ik")
+    {
+      setSerialFootPoseMode(true);
+      robot_control();
+      inverseKinematics();
+      Serial.println("ik_move: enabled");
+    }
+    else
+    {
+      Serial.println("ik_set: stored");
+    }
+    printFootPoseStatus();
+    return true;
+  }
+
+  if (keyword == "ikleft" || keyword == "ikright")
+  {
+    float values[2];
+    if (!parseFloatList(payload, values, 2))
+    {
+      Serial.println("ik_cmd_error: use ikleft,x,y or ikright,x,y");
+      return true;
+    }
+
+    float leftTargetX = serialLeftTargetX;
+    float leftTargetY = serialLeftTargetY;
+    float rightTargetX = serialRightTargetX;
+    float rightTargetY = serialRightTargetY;
+    if (keyword == "ikleft")
+    {
+      leftTargetX = values[0];
+      leftTargetY = values[1];
+    }
+    else
+    {
+      rightTargetX = values[0];
+      rightTargetY = values[1];
+    }
+
+    if (!validateSerialFootPoseTargets(leftTargetX, leftTargetY, rightTargetX, rightTargetY))
+    {
+      Serial.println("ik_target_error: target out of reachable workspace");
+      return true;
+    }
+
+    setSerialFootPoseTargets(leftTargetX, leftTargetY, rightTargetX, rightTargetY);
+    setSerialFootPoseMode(true);
+    robot_control();
+    inverseKinematics();
+    Serial.println("ik_move: enabled");
+    printFootPoseStatus();
+    return true;
+  }
+
+  if (keyword == "ikmove")
+  {
+    if (!validateSerialFootPoseTargets(serialLeftTargetX, serialLeftTargetY, serialRightTargetX, serialRightTargetY))
+    {
+      Serial.println("ik_target_error: stored target out of reachable workspace");
+      return true;
+    }
+    setSerialFootPoseMode(true);
+    robot_control();
+    inverseKinematics();
+    Serial.println("ik_move: enabled");
+    printFootPoseStatus();
+    return true;
+  }
+
+  if (keyword == "ikstop")
+  {
+    setSerialFootPoseMode(false);
+    Serial.println("ik_move: disabled");
+    printFootPoseStatus();
+    return true;
+  }
+
+  if (keyword == "ikstatus")
+  {
+    printFootPoseStatus();
+    return true;
+  }
+
+  if (keyword == "ikhelp")
+  {
+    Serial.println("ik,leftX,leftY,rightX,rightY");
+    Serial.println("ikset,leftX,leftY,rightX,rightY");
+    Serial.println("ikleft,x,y");
+    Serial.println("ikright,x,y");
+    Serial.println("ikmove / ikstop / ikstatus");
+    return true;
+  }
+
+  return false;
+}
+
 //PID串口调参函数
 String serialReceiveUserCommand()
 {
@@ -152,8 +323,14 @@ String serialReceiveUserCommand()
     if (inChar == '\n')
     {
       command = received_chars;
+      command.trim();
+      if (handleFootPoseCommand(command))
+      {
+        received_chars = "";
+        return command;
+      }
       int commaPosition = command.indexOf(',');
-      int newlinePosition = command.indexOf('\n');
+      int newlinePosition = command.length();
       if (commaPosition != -1 && newlinePosition != -1) //给的第一个值
       {
         String firstParam = command.substring(0, commaPosition);
