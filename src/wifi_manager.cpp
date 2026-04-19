@@ -36,6 +36,7 @@ void WiFiManagerPortal::begin()
   setupRoutes();
   loadPreferences();
   refreshIdentity();
+  cachedNetworkOptions_ = "<option value=''>Press Rescan Wi-Fi to scan nearby networks</option>";
 
   if (!savedSsid_.isEmpty() && connectToSavedNetwork())
   {
@@ -68,6 +69,7 @@ void WiFiManagerPortal::setupRoutes()
   g_server.on("/", HTTP_GET, [this]() { handleRoot(); });
   g_server.on("/save", HTTP_POST, [this]() { handleSave(); });
   g_server.on("/forget", HTTP_POST, [this]() { handleForget(); });
+  g_server.on("/rescan", HTTP_POST, [this]() { handleRescan(); });
   g_server.onNotFound([this]() { handleNotFound(); });
 }
 
@@ -82,9 +84,9 @@ void WiFiManagerPortal::loadPreferences()
     return;
   }
 
-  savedSsid_ = g_preferences.getString(kPrefsSsidKey, "");
-  savedPassword_ = g_preferences.getString(kPrefsPassKey, "");
-  savedDeviceName_ = g_preferences.getString(kPrefsNameKey, "");
+  savedSsid_ = g_preferences.isKey(kPrefsSsidKey) ? g_preferences.getString(kPrefsSsidKey, "") : "";
+  savedPassword_ = g_preferences.isKey(kPrefsPassKey) ? g_preferences.getString(kPrefsPassKey, "") : "";
+  savedDeviceName_ = g_preferences.isKey(kPrefsNameKey) ? g_preferences.getString(kPrefsNameKey, "") : "";
 }
 
 void WiFiManagerPortal::saveCredentials(const String &ssid, const String &password)
@@ -146,10 +148,10 @@ void WiFiManagerPortal::refreshIdentity()
   mdnsHostname_.toLowerCase();
   mdnsHostname_ = trimToLength(mdnsHostname_, 63);
 
-  const String apBase = hostBase.isEmpty() ? "SF_Wheel" : hostBase;
+  const String apBase = cleanDisplay.isEmpty() ? "SF_Wheel" : cleanDisplay;
   String apName = apBase;
+  apName.replace(" ", "_");
   apName.replace("-", "_");
-  apName.toUpperCase();
   apSsid_ = apName + "_" + chipSuffix_;
   apSsid_ = trimToLength(apSsid_, kMaxApSsidLen);
 }
@@ -327,6 +329,9 @@ void WiFiManagerPortal::handleSave()
                 "<title>Applying</title></head><body><h1>Applying Settings</h1>"
                 "<p>The device is trying to connect with the new configuration.</p>"
                 "<p>If you are on the AP portal, it will disconnect after a successful join.</p>"
+                "<p>Try reconnecting with one of these links after the device joins Wi-Fi:</p>"
+                "<p><a href='http://" + getHostUrl() + "'>http://" + getHostUrl() + "</a></p>"
+                "<p><a href='http://" + getStaUrl() + "'>http://" + getStaUrl() + "</a></p>"
                 "<p><a href='/'>Back</a></p></body></html>");
 }
 
@@ -336,6 +341,21 @@ void WiFiManagerPortal::handleForget()
   statusMessage_ = "Stored Wi-Fi settings cleared. AP portal is active.";
   WiFi.disconnect(false, false);
   startAccessPoint();
+  cachedNetworkOptions_ = "<option value=''>Press Rescan Wi-Fi to scan nearby networks</option>";
+  g_server.send(200, "text/html; charset=utf-8", buildRootPage());
+}
+
+void WiFiManagerPortal::handleRescan()
+{
+  refreshNetworkOptions();
+  if (cachedNetworkOptions_.indexOf("failed") >= 0)
+  {
+    statusMessage_ = "Wi-Fi scan failed.";
+  }
+  else
+  {
+    statusMessage_ = "Wi-Fi scan finished. Nearby list updated.";
+  }
   g_server.send(200, "text/html; charset=utf-8", buildRootPage());
 }
 
@@ -365,6 +385,40 @@ void WiFiManagerPortal::processPendingCredentials()
 
   startAccessPoint();
   statusMessage_ = "New Wi-Fi connect failed. Returned to AP portal.";
+}
+
+void WiFiManagerPortal::refreshNetworkOptions()
+{
+  cachedNetworkOptions_ = "<option value=''>Scanning Wi-Fi...</option>";
+  const int networkCount = WiFi.scanNetworks(false, true);
+  if (networkCount < 0)
+  {
+    cachedNetworkOptions_ = "<option value=''>Wi-Fi scan failed</option>";
+    WiFi.scanDelete();
+    return;
+  }
+
+  String options = "<option value=''>Select a scanned Wi-Fi network</option>";
+  if (networkCount == 0)
+  {
+    options += "<option value=''>No Wi-Fi found</option>";
+  }
+  else
+  {
+    const int resultCount = networkCount < kMaxScanResults ? networkCount : kMaxScanResults;
+    for (int i = 0; i < resultCount; ++i)
+    {
+      const String ssid = WiFi.SSID(i);
+      options += "<option value='" + htmlEscape(ssid) + "'>";
+      options += htmlEscape(ssid);
+      options += " (";
+      options += String(WiFi.RSSI(i));
+      options += " dBm)";
+      options += "</option>";
+    }
+  }
+  cachedNetworkOptions_ = options;
+  WiFi.scanDelete();
 }
 
 String WiFiManagerPortal::buildRootPage()
@@ -414,6 +468,9 @@ String WiFiManagerPortal::buildRootPage()
   html += "<select id='ssidList' onchange=\"document.getElementById('ssid').value=this.value;\">";
   html += buildNetworkOptions();
   html += "</select>";
+  html += "<form method='post' action='/rescan'>";
+  html += "<button type='submit' class='secondary'>Rescan Wi-Fi</button>";
+  html += "</form>";
   html += "<p>The custom name is used to build the AP SSID and mDNS hostname. The device suffix stays attached so each unit remains unique.</p>";
   html += "<form method='post' action='/forget'>";
   html += "<button type='submit' class='secondary'>Clear Stored Wi-Fi</button>";
@@ -425,29 +482,7 @@ String WiFiManagerPortal::buildRootPage()
 
 String WiFiManagerPortal::buildNetworkOptions()
 {
-  String options = "<option value=''>Select a scanned Wi-Fi network</option>";
-  const int networkCount = WiFi.scanNetworks(false, true);
-
-  if (networkCount <= 0)
-  {
-    options += "<option value=''>No Wi-Fi found</option>";
-    return options;
-  }
-
-  const int resultCount = networkCount < kMaxScanResults ? networkCount : kMaxScanResults;
-  for (int i = 0; i < resultCount; ++i)
-  {
-    const String ssid = WiFi.SSID(i);
-    options += "<option value='" + htmlEscape(ssid) + "'>";
-    options += htmlEscape(ssid);
-    options += " (";
-    options += String(WiFi.RSSI(i));
-    options += " dBm)";
-    options += "</option>";
-  }
-
-  WiFi.scanDelete();
-  return options;
+  return cachedNetworkOptions_;
 }
 
 String WiFiManagerPortal::getModeLabel() const

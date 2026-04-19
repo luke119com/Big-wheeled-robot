@@ -27,8 +27,10 @@ private:
   void handleRoot();
   void handleSave();
   void handleForget();
+  void handleRescan();
   void handleNotFound();
   void processPendingCredentials();
+  void refreshNetworkOptions();
   String buildRootPage();
   String buildNetworkOptions();
   String getModeLabel() const;
@@ -52,6 +54,7 @@ private:
   String apSsid_;
   String mdnsHostname_;
   String displayName_;
+  String cachedNetworkOptions_;
   bool apModeActive_ = false;
   bool dnsActive_ = false;
   bool mdnsActive_ = false;
