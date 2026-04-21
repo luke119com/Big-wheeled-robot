@@ -77,7 +77,7 @@ void mapPs2ToRobotControl()
 {
   unsigned long now = millis();
 
-  if (serialFootPoseMode || !ps2Connected)
+  if (!ps2Connected)
   {
     forwardBackward = 0;
     steering = 0;
