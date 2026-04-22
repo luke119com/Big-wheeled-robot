@@ -1,5 +1,9 @@
 #include "wifi_manager.h"
 
+#include "device_tuning.h"
+#include "pid.h"
+#include "robot.h"
+
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <Preferences.h>
@@ -12,6 +16,15 @@ constexpr const char *kPrefsNamespace = "wifi";
 constexpr const char *kPrefsSsidKey = "ssid";
 constexpr const char *kPrefsPassKey = "password";
 constexpr const char *kPrefsNameKey = "device_name";
+constexpr const char *kPrefsInitPitchKey = "init_pitch";
+constexpr const char *kPrefsLeftYKey = "left_y";
+constexpr const char *kPrefsRightYKey = "right_y";
+constexpr const char *kPrefsMapH0Key = "map_h0";
+constexpr const char *kPrefsMapH1Key = "map_h1";
+constexpr const char *kPrefsMapH2Key = "map_h2";
+constexpr const char *kPrefsMapP0Key = "map_p0";
+constexpr const char *kPrefsMapP1Key = "map_p1";
+constexpr const char *kPrefsMapP2Key = "map_p2";
 constexpr const char *kPortalApPassword = "87654321";
 constexpr uint32_t kConnectTimeoutMs = 15000;
 constexpr uint16_t kDnsPort = 53;
@@ -23,6 +36,23 @@ constexpr size_t kMaxApSsidLen = 32;
 Preferences g_preferences;
 WebServer g_server(80);
 DNSServer g_dnsServer;
+
+float readArgFloat(const String &name, float fallback)
+{
+  if (!g_server.hasArg(name))
+  {
+    return fallback;
+  }
+
+  String raw = g_server.arg(name);
+  raw.trim();
+  if (raw.isEmpty())
+  {
+    return fallback;
+  }
+
+  return raw.toFloat();
+}
 }
 
 WiFiManagerPortal wifiManagerPortal;
@@ -35,6 +65,7 @@ void WiFiManagerPortal::begin()
   initIdentity();
   setupRoutes();
   loadPreferences();
+  loadTuningConfig();
   refreshIdentity();
   cachedNetworkOptions_ = "<option value=''>Press Rescan Wi-Fi to scan nearby networks</option>";
 
@@ -67,7 +98,9 @@ void WiFiManagerPortal::loop()
 void WiFiManagerPortal::setupRoutes()
 {
   g_server.on("/", HTTP_GET, [this]() { handleRoot(); });
+  g_server.on("/api/status", HTTP_GET, [this]() { handleStatusApi(); });
   g_server.on("/save", HTTP_POST, [this]() { handleSave(); });
+  g_server.on("/tuning", HTTP_POST, [this]() { handleTuningSave(); });
   g_server.on("/forget", HTTP_POST, [this]() { handleForget(); });
   g_server.on("/rescan", HTTP_POST, [this]() { handleRescan(); });
   g_server.onNotFound([this]() { handleNotFound(); });
@@ -77,6 +110,7 @@ void WiFiManagerPortal::loadPreferences()
 {
   if (!g_preferences.begin(kPrefsNamespace, false))
   {
+    preferencesReady_ = false;
     statusMessage_ = "Failed to open NVS. Wi-Fi settings will not persist.";
     savedSsid_ = "";
     savedPassword_ = "";
@@ -84,32 +118,80 @@ void WiFiManagerPortal::loadPreferences()
     return;
   }
 
+  preferencesReady_ = true;
   savedSsid_ = g_preferences.isKey(kPrefsSsidKey) ? g_preferences.getString(kPrefsSsidKey, "") : "";
   savedPassword_ = g_preferences.isKey(kPrefsPassKey) ? g_preferences.getString(kPrefsPassKey, "") : "";
   savedDeviceName_ = g_preferences.isKey(kPrefsNameKey) ? g_preferences.getString(kPrefsNameKey, "") : "";
+}
+
+void WiFiManagerPortal::loadTuningConfig()
+{
+  DeviceTuningConfig config = getDeviceTuningConfig();
+  if (!preferencesReady_)
+  {
+    applyDeviceTuningConfig(config);
+    return;
+  }
+  config.initPitch = g_preferences.isKey(kPrefsInitPitchKey) ? g_preferences.getFloat(kPrefsInitPitchKey, config.initPitch) : config.initPitch;
+  config.leftHeight = g_preferences.isKey(kPrefsLeftYKey) ? g_preferences.getFloat(kPrefsLeftYKey, config.leftHeight) : config.leftHeight;
+  config.rightHeight = g_preferences.isKey(kPrefsRightYKey) ? g_preferences.getFloat(kPrefsRightYKey, config.rightHeight) : config.rightHeight;
+  config.pitchMap[0].height = g_preferences.isKey(kPrefsMapH0Key) ? g_preferences.getFloat(kPrefsMapH0Key, config.pitchMap[0].height) : config.pitchMap[0].height;
+  config.pitchMap[1].height = g_preferences.isKey(kPrefsMapH1Key) ? g_preferences.getFloat(kPrefsMapH1Key, config.pitchMap[1].height) : config.pitchMap[1].height;
+  config.pitchMap[2].height = g_preferences.isKey(kPrefsMapH2Key) ? g_preferences.getFloat(kPrefsMapH2Key, config.pitchMap[2].height) : config.pitchMap[2].height;
+  config.pitchMap[0].pitch = g_preferences.isKey(kPrefsMapP0Key) ? g_preferences.getFloat(kPrefsMapP0Key, config.pitchMap[0].pitch) : config.pitchMap[0].pitch;
+  config.pitchMap[1].pitch = g_preferences.isKey(kPrefsMapP1Key) ? g_preferences.getFloat(kPrefsMapP1Key, config.pitchMap[1].pitch) : config.pitchMap[1].pitch;
+  config.pitchMap[2].pitch = g_preferences.isKey(kPrefsMapP2Key) ? g_preferences.getFloat(kPrefsMapP2Key, config.pitchMap[2].pitch) : config.pitchMap[2].pitch;
+  applyDeviceTuningConfig(config);
 }
 
 void WiFiManagerPortal::saveCredentials(const String &ssid, const String &password)
 {
   savedSsid_ = ssid;
   savedPassword_ = password;
-  g_preferences.putString(kPrefsSsidKey, ssid);
-  g_preferences.putString(kPrefsPassKey, password);
+  if (preferencesReady_)
+  {
+    g_preferences.putString(kPrefsSsidKey, ssid);
+    g_preferences.putString(kPrefsPassKey, password);
+  }
 }
 
 void WiFiManagerPortal::saveDeviceName(const String &deviceName)
 {
   savedDeviceName_ = deviceName;
-  g_preferences.putString(kPrefsNameKey, deviceName);
+  if (preferencesReady_)
+  {
+    g_preferences.putString(kPrefsNameKey, deviceName);
+  }
   refreshIdentity();
+}
+
+void WiFiManagerPortal::saveTuningConfig()
+{
+  if (!preferencesReady_)
+  {
+    return;
+  }
+  const DeviceTuningConfig config = getDeviceTuningConfig();
+  g_preferences.putFloat(kPrefsInitPitchKey, config.initPitch);
+  g_preferences.putFloat(kPrefsLeftYKey, config.leftHeight);
+  g_preferences.putFloat(kPrefsRightYKey, config.rightHeight);
+  g_preferences.putFloat(kPrefsMapH0Key, config.pitchMap[0].height);
+  g_preferences.putFloat(kPrefsMapH1Key, config.pitchMap[1].height);
+  g_preferences.putFloat(kPrefsMapH2Key, config.pitchMap[2].height);
+  g_preferences.putFloat(kPrefsMapP0Key, config.pitchMap[0].pitch);
+  g_preferences.putFloat(kPrefsMapP1Key, config.pitchMap[1].pitch);
+  g_preferences.putFloat(kPrefsMapP2Key, config.pitchMap[2].pitch);
 }
 
 void WiFiManagerPortal::clearCredentials()
 {
   savedSsid_ = "";
   savedPassword_ = "";
-  g_preferences.remove(kPrefsSsidKey);
-  g_preferences.remove(kPrefsPassKey);
+  if (preferencesReady_)
+  {
+    g_preferences.remove(kPrefsSsidKey);
+    g_preferences.remove(kPrefsPassKey);
+  }
 }
 
 void WiFiManagerPortal::initIdentity()
@@ -359,6 +441,31 @@ void WiFiManagerPortal::handleRescan()
   g_server.send(200, "text/html; charset=utf-8", buildRootPage());
 }
 
+void WiFiManagerPortal::handleTuningSave()
+{
+  DeviceTuningConfig config = getDeviceTuningConfig();
+  config.initPitch = readArgFloat("init_pitch", config.initPitch);
+  config.leftHeight = readArgFloat("left_height", config.leftHeight);
+  config.rightHeight = readArgFloat("right_height", config.rightHeight);
+  config.pitchMap[0].height = readArgFloat("map_height_0", config.pitchMap[0].height);
+  config.pitchMap[1].height = readArgFloat("map_height_1", config.pitchMap[1].height);
+  config.pitchMap[2].height = readArgFloat("map_height_2", config.pitchMap[2].height);
+  config.pitchMap[0].pitch = readArgFloat("map_pitch_0", config.pitchMap[0].pitch);
+  config.pitchMap[1].pitch = readArgFloat("map_pitch_1", config.pitchMap[1].pitch);
+  config.pitchMap[2].pitch = readArgFloat("map_pitch_2", config.pitchMap[2].pitch);
+
+  applyDeviceTuningConfig(config);
+  saveTuningConfig();
+  statusMessage_ = "Tuning values updated.";
+  g_server.send(200, "text/html; charset=utf-8", buildRootPage());
+}
+
+void WiFiManagerPortal::handleStatusApi()
+{
+  g_server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  g_server.send(200, "application/json; charset=utf-8", buildStatusJson());
+}
+
 void WiFiManagerPortal::handleNotFound()
 {
   if (apModeActive_)
@@ -421,60 +528,274 @@ void WiFiManagerPortal::refreshNetworkOptions()
   WiFi.scanDelete();
 }
 
+String WiFiManagerPortal::buildStatusJson() const
+{
+  const DeviceTuningConfig config = getDeviceTuningConfig();
+
+  String json;
+  json.reserve(1400);
+  json += "{";
+  json += "\"mode\":\"" + jsonEscape(getModeLabel()) + "\",";
+  json += "\"status\":\"" + jsonEscape(statusMessage_) + "\",";
+  json += "\"network\":\"" + jsonEscape(getConnectionDetails()) + "\",";
+  json += "\"display_name\":\"" + jsonEscape(displayName_) + "\",";
+  json += "\"imu\":{";
+  json += "\"roll\":" + String(roll, 3) + ",";
+  json += "\"pitch\":" + String(pitch, 3) + ",";
+  json += "\"yaw\":" + String(yaw, 3) + ",";
+  json += "\"gyro_y\":" + String(gyroY, 3);
+  json += "},";
+  json += "\"control\":{";
+  json += "\"vel_kp\":" + String(vel_kp, 4) + ",";
+  json += "\"balance_kp\":" + String(balance_kp, 4) + ",";
+  json += "\"balance_kd\":" + String(balance_kd, 4) + ",";
+  json += "\"balance_ki\":" + String(balance_ki, 4) + ",";
+  json += "\"robot_kp\":" + String(robot_kp, 4) + ",";
+  json += "\"speed_limit\":" + String(speed_limit) + ",";
+  json += "\"wheel_left_target\":" + String(wheel_motor1_target, 3) + ",";
+  json += "\"wheel_right_target\":" + String(wheel_motor2_target, 3) + ",";
+  json += "\"wheel_left_velocity\":" + String(motor1_vel, 3) + ",";
+  json += "\"wheel_right_velocity\":" + String(motor2_vel, 3);
+  json += "},";
+  json += "\"tuning\":{";
+  json += "\"init_pitch\":" + String(config.initPitch, 3) + ",";
+  json += "\"balance_offset\":" + String(balance_offset, 3) + ",";
+  json += "\"current_height\":" + String(getCurrentHeightForPitchControl(), 3) + ",";
+  json += "\"current_pitch_target\":" + String(getCurrentPitchTarget(), 3) + ",";
+  json += "\"height_offset\":" + String(static_cast<float>(ZeparamremoteValue), 3) + ",";
+  json += "\"left_height\":" + String(leftY, 3) + ",";
+  json += "\"right_height\":" + String(rightY, 3) + ",";
+  json += "\"left_target_y\":" + String(Y1, 3) + ",";
+  json += "\"right_target_y\":" + String(y2, 3);
+  json += "},";
+  json += "\"ik\":{";
+  json += "\"serial_mode\":" + String(serialFootPoseMode ? "true" : "false") + ",";
+  json += "\"left_x\":" + String(x1, 3) + ",";
+  json += "\"right_x\":" + String(x2, 3) + ",";
+  json += "\"serial_left_y\":" + String(serialLeftTargetY, 3) + ",";
+  json += "\"serial_right_y\":" + String(serialRightTargetY, 3);
+  json += "},";
+  json += "\"pitch_map\":[";
+  for (int i = 0; i < 3; ++i)
+  {
+    if (i > 0)
+    {
+      json += ",";
+    }
+    json += "{\"height\":" + String(config.pitchMap[i].height, 3) + ",\"pitch\":" + String(config.pitchMap[i].pitch, 3) + "}";
+  }
+  json += "]}";
+  return json;
+}
+
 String WiFiManagerPortal::buildRootPage()
 {
+  const DeviceTuningConfig config = getDeviceTuningConfig();
+
   String html;
-  html.reserve(7000);
+  html.reserve(18000);
 
   html += "<!DOCTYPE html><html><head><meta charset='utf-8'>";
   html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>SF Bipedal Wheel Wi-Fi</title>";
-  html += "<style>";
-  html += "body{font-family:Arial,Helvetica,sans-serif;background:#f5f7fb;color:#1f2937;margin:0;padding:24px;}";
-  html += ".card{max-width:880px;margin:0 auto;background:#fff;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(15,23,42,.08);}";
-  html += "h1{margin-top:0;font-size:28px;}p{line-height:1.5;}label{display:block;margin:14px 0 6px;font-weight:600;}";
-  html += "input,select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #cbd5e1;font-size:16px;box-sizing:border-box;}";
-  html += "button{background:#0f766e;color:#fff;border:none;font-weight:700;cursor:pointer;margin-top:16px;}";
-  html += ".secondary{background:#475569;}.status{padding:12px 14px;border-radius:12px;background:#ecfeff;margin:16px 0;}";
-  html += ".grid{display:grid;grid-template-columns:1fr;gap:14px;}@media(min-width:780px){.grid{grid-template-columns:1fr 1fr;}}";
-  html += ".mono{font-family:Consolas,monospace;}.meta{display:grid;grid-template-columns:1fr;gap:10px;margin:18px 0;}@media(min-width:780px){.meta{grid-template-columns:1fr 1fr;}}";
-  html += ".meta div{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px;}";
-  html += "</style></head><body><div class='card'>";
-  html += "<h1>Wi-Fi Setup</h1>";
-  html += "<div class='status'><strong>Mode:</strong> " + htmlEscape(getModeLabel()) + "<br>";
-  html += "<strong>Status:</strong> " + htmlEscape(statusMessage_) + "<br>";
-  html += "<strong>Network:</strong> " + htmlEscape(getConnectionDetails()) + "</div>";
-  html += "<div class='meta'>";
-  html += "<div><strong>Device Name</strong><br><span class='mono'>" + htmlEscape(displayName_) + "</span></div>";
-  html += "<div><strong>mDNS Hostname</strong><br><span class='mono'>" + htmlEscape(mdnsHostname_) + ".local</span></div>";
-  html += "<div><strong>STA URL</strong><br><span class='mono'>" + htmlEscape(getStaUrl()) + "</span></div>";
-  html += "<div><strong>mDNS URL</strong><br><span class='mono'>" + htmlEscape(getHostUrl()) + "</span></div>";
-  html += "<div><strong>AP SSID</strong><br><span class='mono'>" + htmlEscape(apSsid_) + "</span></div>";
-  html += "<div><strong>AP Password</strong><br><span class='mono'>" + htmlEscape(String(kPortalApPassword)) + "</span></div>";
-  html += "<div><strong>MAC Address</strong><br><span class='mono'>" + htmlEscape(macAddress_) + "</span></div>";
-  html += "<div><strong>Unique ID</strong><br><span class='mono'>" + htmlEscape(chipSuffix_) + "</span></div>";
+  html += "<title>SF Wheel Console</title>";
+  html += R"HTML(<style>
+:root{--bg:#eef4f1;--panel:#ffffff;--panel-2:#f7faf8;--line:#d7e2db;--text:#172026;--muted:#5d6c66;--accent:#0f766e;--accent-2:#d97706;--shadow:0 18px 48px rgba(18,42,32,.10);}
+*{box-sizing:border-box}body{margin:0;font-family:"Trebuchet MS","Segoe UI",sans-serif;color:var(--text);background:radial-gradient(circle at top left,#f9fcfb 0,#eef4f1 42%,#dde9e2 100%);padding:20px}
+.app{max-width:1180px;margin:0 auto}
+.hero{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;margin-bottom:16px}
+.surface{background:rgba(255,255,255,.92);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.8);border-radius:24px;box-shadow:var(--shadow);padding:22px}
+.eyebrow{margin:0 0 8px;color:var(--accent-2);font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+h1{margin:0 0 10px;font-size:34px;line-height:1.05}h2{margin:0 0 14px;font-size:20px}h3{margin:0 0 12px;font-size:15px}
+p{margin:0;color:var(--muted);line-height:1.6}
+.chip-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.chip{padding:10px 14px;border-radius:999px;background:#e8f5f2;color:#0b5f58;font-weight:700;font-size:13px}
+.menu{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}.menu-btn{border:0;border-radius:999px;padding:12px 18px;background:#dbe8e2;color:#27433b;font-weight:700;cursor:pointer}.menu-btn.active{background:linear-gradient(135deg,var(--accent),#155e75);color:#fff}
+.panel{display:none;animation:fade .24s ease}.panel.active{display:block}@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}.col-4{grid-column:span 4}.col-6{grid-column:span 6}.col-8{grid-column:span 8}.col-12{grid-column:span 12}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat-card{background:var(--panel-2);border:1px solid var(--line);border-radius:18px;padding:16px}.stat-card span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.stat-card strong{display:block;margin-top:8px;font-size:28px}
+.kv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kv{padding:14px;border-radius:16px;background:var(--panel-2);border:1px solid var(--line)}.kv span{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.kv strong{font-size:18px}
+.mono{font-family:Consolas,"Courier New",monospace}
+label{display:block;margin:14px 0 8px;font-weight:700;font-size:14px}input,select{width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:#fff;color:var(--text);font-size:15px}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.btn{display:inline-flex;align-items:center;justify-content:center;min-width:180px;padding:12px 18px;border:0;border-radius:14px;background:linear-gradient(135deg,var(--accent),#155e75);color:#fff;font-weight:700;cursor:pointer}.btn.secondary{background:#415954}
+.map-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:10px;align-items:end}.hint{margin-top:10px;font-size:13px}.subtle{color:var(--muted);font-size:13px}
+@media(max-width:980px){.hero,.stat-grid{grid-template-columns:1fr}.col-4,.col-6,.col-8,.col-12{grid-column:span 12}.kv-grid{grid-template-columns:1fr}.map-grid{grid-template-columns:1fr}}
+</style>)HTML";
+  html += "</head><body><div class='app'>";
+  html += "<div class='hero'>";
+  html += "<section class='surface'><p class='eyebrow'>Embedded Control Portal</p><h1>SF Wheel Console</h1>";
+  html += "<p>Live telemetry, pitch tuning, and Wi-Fi setup for the robot in one page.</p>";
+  html += "<div class='chip-row'><div class='chip'>Mode: <span id='modeChip'>" + htmlEscape(getModeLabel()) + "</span></div>";
+  html += "<div class='chip'>Network: <span id='networkChip'>" + htmlEscape(getConnectionDetails()) + "</span></div></div></section>";
+  html += "<section class='surface'><h2>Portal Status</h2>";
+  html += "<div class='kv-grid'>";
+  html += "<div class='kv'><span>Device</span><strong class='mono'>" + htmlEscape(displayName_) + "</strong></div>";
+  html += "<div class='kv'><span>mDNS</span><strong class='mono'>" + htmlEscape(mdnsHostname_) + ".local</strong></div>";
+  html += "<div class='kv'><span>STA URL</span><strong class='mono'>" + htmlEscape(getStaUrl()) + "</strong></div>";
+  html += "<div class='kv'><span>AP SSID</span><strong class='mono'>" + htmlEscape(apSsid_) + "</strong></div>";
+  html += "</div><p class='hint'>Status: <span id='statusMessage'>" + htmlEscape(statusMessage_) + "</span></p></section></div>";
+
+  html += "<div class='menu'>";
+  html += "<button type='button' class='menu-btn active' data-panel='status'>Status</button>";
+  html += "<button type='button' class='menu-btn' data-panel='tuning'>Tuning</button>";
+  html += "<button type='button' class='menu-btn' data-panel='wifi'>Wi-Fi</button>";
   html += "</div>";
-  html += "<div class='grid'><div>";
-  html += "<form method='post' action='/save'>";
+
+  html += "<section id='panel-status' class='panel active'><div class='grid'>";
+  html += "<div class='col-12 surface'><div class='stat-grid'>";
+  html += "<div class='stat-card'><span>Pitch</span><strong id='statPitch'>--</strong></div>";
+  html += "<div class='stat-card'><span>Current Height</span><strong id='statHeight'>--</strong></div>";
+  html += "<div class='stat-card'><span>Pitch Target</span><strong id='statPitchTarget'>--</strong></div>";
+  html += "<div class='stat-card'><span>Wheel Mode</span><strong id='statSerialMode'>--</strong></div>";
+  html += "</div></div>";
+  html += "<div class='col-6 surface'><h2>IMU And Drive</h2><div class='kv-grid'>";
+  html += "<div class='kv'><span>Roll</span><strong id='imuRoll'>--</strong></div>";
+  html += "<div class='kv'><span>Yaw</span><strong id='imuYaw'>--</strong></div>";
+  html += "<div class='kv'><span>Gyro Y</span><strong id='imuGyroY'>--</strong></div>";
+  html += "<div class='kv'><span>Height Offset</span><strong id='tuningHeightOffset'>--</strong></div>";
+  html += "<div class='kv'><span>Wheel Left Target</span><strong id='wheelLeftTarget'>--</strong></div>";
+  html += "<div class='kv'><span>Wheel Right Target</span><strong id='wheelRightTarget'>--</strong></div>";
+  html += "<div class='kv'><span>Wheel Left Velocity</span><strong id='wheelLeftVelocity'>--</strong></div>";
+  html += "<div class='kv'><span>Wheel Right Velocity</span><strong id='wheelRightVelocity'>--</strong></div>";
+  html += "</div></div>";
+  html += "<div class='col-6 surface'><h2>PID Status</h2><div class='kv-grid'>";
+  html += "<div class='kv'><span>vel_kp</span><strong id='pidVelKp'>--</strong></div>";
+  html += "<div class='kv'><span>balance_kp</span><strong id='pidBalanceKp'>--</strong></div>";
+  html += "<div class='kv'><span>balance_kd</span><strong id='pidBalanceKd'>--</strong></div>";
+  html += "<div class='kv'><span>balance_ki</span><strong id='pidBalanceKi'>--</strong></div>";
+  html += "<div class='kv'><span>robot_kp</span><strong id='pidRobotKp'>--</strong></div>";
+  html += "<div class='kv'><span>speed_limit</span><strong id='pidSpeedLimit'>--</strong></div>";
+  html += "</div></div>";
+  html += "<div class='col-6 surface'><h2>Height And Pose</h2><div class='kv-grid'>";
+  html += "<div class='kv'><span>Init Pitch</span><strong id='tuningInitPitch'>--</strong></div>";
+  html += "<div class='kv'><span>Balance Offset</span><strong id='tuningBalanceOffset'>--</strong></div>";
+  html += "<div class='kv'><span>Left Base Height</span><strong id='tuningLeftHeight'>--</strong></div>";
+  html += "<div class='kv'><span>Right Base Height</span><strong id='tuningRightHeight'>--</strong></div>";
+  html += "<div class='kv'><span>Left Target Y</span><strong id='tuningLeftTargetY'>--</strong></div>";
+  html += "<div class='kv'><span>Right Target Y</span><strong id='tuningRightTargetY'>--</strong></div>";
+  html += "</div></div>";
+  html += "<div class='col-6 surface'><h2>IK Status</h2><div class='kv-grid'>";
+  html += "<div class='kv'><span>Left X</span><strong id='ikLeftX'>--</strong></div>";
+  html += "<div class='kv'><span>Right X</span><strong id='ikRightX'>--</strong></div>";
+  html += "<div class='kv'><span>Serial Left Y</span><strong id='ikSerialLeftY'>--</strong></div>";
+  html += "<div class='kv'><span>Serial Right Y</span><strong id='ikSerialRightY'>--</strong></div>";
+  html += "</div><p class='hint'>API: <span id='apiHealth'>waiting</span></p></div>";
+  html += "<div class='col-12 surface'><h2>Height To Pitch Map</h2><div id='pitchMapStatus' class='kv-grid'></div></div>";
+  html += "</div></section>";
+
+  html += "<section id='panel-tuning' class='panel'><div class='grid'>";
+  html += "<div class='col-12 surface'><h2>Tuning Setup</h2><p>Base height is the left/right wheel stance. The pitch target used by balance control is <span class='mono'>init_pitch + interpolated(height map)</span>.</p>";
+  html += "<form method='post' action='/tuning'><div class='grid'>";
+  html += "<div class='col-4'><label for='init_pitch'>Init Pitch (deg)</label><input id='init_pitch' name='init_pitch' type='number' step='0.01' value='" + String(config.initPitch, 2) + "'></div>";
+  html += "<div class='col-4'><label for='left_height'>Left Height (mm)</label><input id='left_height' name='left_height' type='number' step='0.1' value='" + String(config.leftHeight, 1) + "'></div>";
+  html += "<div class='col-4'><label for='right_height'>Right Height (mm)</label><input id='right_height' name='right_height' type='number' step='0.1' value='" + String(config.rightHeight, 1) + "'></div>";
+  html += "<div class='col-12'><h3>Height To Pitch Points</h3><p class='subtle'>Use three points. The firmware sorts them by height and linearly interpolates between them.</p></div>";
+  for (int i = 0; i < 3; ++i)
+  {
+    html += "<div class='col-12'><div class='map-grid'>";
+    html += "<div><label for='map_height_" + String(i) + "'>Point " + String(i + 1) + " Height (mm)</label><input id='map_height_" + String(i) + "' name='map_height_" + String(i) + "' type='number' step='0.1' value='" + String(config.pitchMap[i].height, 1) + "'></div>";
+    html += "<div><label for='map_pitch_" + String(i) + "'>Point " + String(i + 1) + " Pitch (deg)</label><input id='map_pitch_" + String(i) + "' name='map_pitch_" + String(i) + "' type='number' step='0.01' value='" + String(config.pitchMap[i].pitch, 2) + "'></div>";
+    html += "</div></div>";
+  }
+  html += "<div class='col-12'><div class='btn-row'><button type='submit' class='btn'>Save Tuning</button></div></div>";
+  html += "</div></form></div></div></section>";
+
+  html += "<section id='panel-wifi' class='panel'><div class='grid'>";
+  html += "<div class='col-6 surface'><h2>Wi-Fi Setup</h2><form method='post' action='/save'>";
   html += "<label for='device_name'>Custom Device Name</label>";
   html += "<input id='device_name' name='device_name' value='" + htmlEscape(savedDeviceName_) + "' placeholder='Example: left-leg'>";
   html += "<label for='ssid'>Wi-Fi SSID</label>";
   html += "<input id='ssid' name='ssid' value='" + htmlEscape(savedSsid_) + "' placeholder='Enter SSID' required>";
   html += "<label for='password'>Wi-Fi Password</label>";
   html += "<input id='password' name='password' type='password' placeholder='Enter password'>";
-  html += "<button type='submit'>Save and Connect</button>";
-  html += "</form></div><div>";
-  html += "<label for='ssidList'>Nearby Wi-Fi</label>";
+  html += "<div class='btn-row'><button type='submit' class='btn'>Save And Connect</button></div></form></div>";
+  html += "<div class='col-6 surface'><h2>Nearby Networks</h2>";
+  html += "<label for='ssidList'>Scanned SSID</label>";
   html += "<select id='ssidList' onchange=\"document.getElementById('ssid').value=this.value;\">";
   html += buildNetworkOptions();
   html += "</select>";
-  html += "<form method='post' action='/rescan'>";
-  html += "<button type='submit' class='secondary'>Rescan Wi-Fi</button>";
-  html += "</form>";
-  html += "<p>The custom name is used to build the AP SSID and mDNS hostname. The device suffix stays attached so each unit remains unique.</p>";
-  html += "<form method='post' action='/forget'>";
-  html += "<button type='submit' class='secondary'>Clear Stored Wi-Fi</button>";
-  html += "</form></div></div>";
+  html += "<div class='btn-row'><form method='post' action='/rescan'><button type='submit' class='btn secondary'>Rescan Wi-Fi</button></form>";
+  html += "<form method='post' action='/forget'><button type='submit' class='btn secondary'>Clear Stored Wi-Fi</button></form></div>";
+  html += "<p class='hint'>The custom name is used for AP SSID and mDNS host naming.</p></div>";
+  html += "<div class='col-12 surface'><h2>Network Metadata</h2><div class='kv-grid'>";
+  html += "<div class='kv'><span>Device Name</span><strong class='mono'>" + htmlEscape(displayName_) + "</strong></div>";
+  html += "<div class='kv'><span>mDNS Hostname</span><strong class='mono'>" + htmlEscape(mdnsHostname_) + ".local</strong></div>";
+  html += "<div class='kv'><span>STA URL</span><strong class='mono'>" + htmlEscape(getStaUrl()) + "</strong></div>";
+  html += "<div class='kv'><span>mDNS URL</span><strong class='mono'>" + htmlEscape(getHostUrl()) + "</strong></div>";
+  html += "<div class='kv'><span>AP SSID</span><strong class='mono'>" + htmlEscape(apSsid_) + "</strong></div>";
+  html += "<div class='kv'><span>AP Password</span><strong class='mono'>" + htmlEscape(String(kPortalApPassword)) + "</strong></div>";
+  html += "<div class='kv'><span>MAC Address</span><strong class='mono'>" + htmlEscape(macAddress_) + "</strong></div>";
+  html += "<div class='kv'><span>Unique ID</span><strong class='mono'>" + htmlEscape(chipSuffix_) + "</strong></div>";
+  html += "</div></div></div></section>";
+
+  html += R"HTML(<script>
+const buttons=document.querySelectorAll('.menu-btn');
+const panels=document.querySelectorAll('.panel');
+function activatePanel(name){
+  buttons.forEach((button)=>button.classList.toggle('active',button.dataset.panel===name));
+  panels.forEach((panel)=>panel.classList.toggle('active',panel.id==='panel-'+name));
+}
+buttons.forEach((button)=>button.addEventListener('click',()=>activatePanel(button.dataset.panel)));
+function setText(id,value){
+  const node=document.getElementById(id);
+  if(node){node.textContent=value;}
+}
+function pick(root,key,empty){
+  return root&&root[key]!==undefined&&root[key]!==null?root[key]:empty;
+}
+function fmt(value,digits){
+  const number=Number(value);
+  return Number.isFinite(number)?number.toFixed(digits):'--';
+}
+function renderPitchMap(points){
+  const host=document.getElementById('pitchMapStatus');
+  if(!host){return;}
+  host.innerHTML=(points||[]).map((point,index)=>'<div class="kv"><span>Point '+(index+1)+'</span><strong>'+fmt(point.height,1)+' mm -> '+fmt(point.pitch,2)+' deg</strong></div>').join('');
+}
+async function refreshStatus(){
+  try{
+    const response=await fetch('/api/status',{cache:'no-store'});
+    if(!response.ok){throw new Error('http');}
+    const data=await response.json();
+    setText('modeChip',data.mode||'--');
+    setText('networkChip',data.network||'--');
+    setText('statusMessage',data.status||'--');
+    setText('statPitch',fmt(pick(data.imu,'pitch',null),2)+' deg');
+    setText('statHeight',fmt(pick(data.tuning,'current_height',null),1)+' mm');
+    setText('statPitchTarget',fmt(pick(data.tuning,'current_pitch_target',null),2)+' deg');
+    setText('statSerialMode',pick(data.ik,'serial_mode',false)?'SERIAL IK':'AUTO');
+    setText('imuRoll',fmt(pick(data.imu,'roll',null),2)+' deg');
+    setText('imuYaw',fmt(pick(data.imu,'yaw',null),2)+' deg');
+    setText('imuGyroY',fmt(pick(data.imu,'gyro_y',null),2)+' deg/s');
+    setText('tuningHeightOffset',fmt(pick(data.tuning,'height_offset',null),1)+' mm');
+    setText('wheelLeftTarget',fmt(pick(data.control,'wheel_left_target',null),2));
+    setText('wheelRightTarget',fmt(pick(data.control,'wheel_right_target',null),2));
+    setText('wheelLeftVelocity',fmt(pick(data.control,'wheel_left_velocity',null),2));
+    setText('wheelRightVelocity',fmt(pick(data.control,'wheel_right_velocity',null),2));
+    setText('pidVelKp',fmt(pick(data.control,'vel_kp',null),4));
+    setText('pidBalanceKp',fmt(pick(data.control,'balance_kp',null),4));
+    setText('pidBalanceKd',fmt(pick(data.control,'balance_kd',null),4));
+    setText('pidBalanceKi',fmt(pick(data.control,'balance_ki',null),4));
+    setText('pidRobotKp',fmt(pick(data.control,'robot_kp',null),4));
+    setText('pidSpeedLimit',String(pick(data.control,'speed_limit','--')));
+    setText('tuningInitPitch',fmt(pick(data.tuning,'init_pitch',null),2)+' deg');
+    setText('tuningBalanceOffset',fmt(pick(data.tuning,'balance_offset',null),2)+' deg');
+    setText('tuningLeftHeight',fmt(pick(data.tuning,'left_height',null),1)+' mm');
+    setText('tuningRightHeight',fmt(pick(data.tuning,'right_height',null),1)+' mm');
+    setText('tuningLeftTargetY',fmt(pick(data.tuning,'left_target_y',null),1)+' mm');
+    setText('tuningRightTargetY',fmt(pick(data.tuning,'right_target_y',null),1)+' mm');
+    setText('ikLeftX',fmt(pick(data.ik,'left_x',null),1)+' mm');
+    setText('ikRightX',fmt(pick(data.ik,'right_x',null),1)+' mm');
+    setText('ikSerialLeftY',fmt(pick(data.ik,'serial_left_y',null),1)+' mm');
+    setText('ikSerialRightY',fmt(pick(data.ik,'serial_right_y',null),1)+' mm');
+    setText('apiHealth','live');
+    renderPitchMap(data.pitch_map);
+  }catch(error){
+    setText('apiHealth','offline');
+  }
+}
+activatePanel('status');
+refreshStatus();
+setInterval(refreshStatus,1000);
+</script>)HTML";
   html += "</div></body></html>";
 
   return html;
@@ -554,6 +875,40 @@ String WiFiManagerPortal::htmlEscape(const String &value)
       break;
     case '\'':
       escaped += "&#39;";
+      break;
+    default:
+      escaped += ch;
+      break;
+    }
+  }
+
+  return escaped;
+}
+
+String WiFiManagerPortal::jsonEscape(const String &value)
+{
+  String escaped;
+  escaped.reserve(value.length() + 8);
+
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    const char ch = value[i];
+    switch (ch)
+    {
+    case '\\':
+      escaped += "\\\\";
+      break;
+    case '"':
+      escaped += "\\\"";
+      break;
+    case '\n':
+      escaped += "\\n";
+      break;
+    case '\r':
+      escaped += "\\r";
+      break;
+    case '\t':
+      escaped += "\\t";
       break;
     default:
       escaped += ch;

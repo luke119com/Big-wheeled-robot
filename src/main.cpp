@@ -15,6 +15,7 @@
 #include "pid.h"
 #include "WS2812.h"
 #include "PS2.h"
+#include "device_tuning.h"
 #include "wifi_manager.h"
 
 #define _constrain(amt, low, high) ((amt) < (low) ? (low) : ((amt) > (high) ? (high) : (amt)))
@@ -66,6 +67,7 @@ void loop()
   // ws2812Test(pixels);
   serialReceiveUserCommand();
   PIDValues pid = interpolatePID(ZeparamremoteValue);
+  updateBalanceOffsetByCurrentHeight();
   wheel_control();
   CAN_Control();
   // remote_switch();

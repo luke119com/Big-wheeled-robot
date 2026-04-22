@@ -106,20 +106,31 @@ void wheel_control()
 
 
 //PID线性拟合函数
-PIDValues  interpolatePID(int y_height) {
+PIDValues interpolatePID(int y_height)
+{
   if(Shake_shoulder == 0)
   {
       // 已知数据点
-      float y0 = 0, y1 = 80, y2 = 150;
-      PIDValues pid0 = {-0.55,-0.183, 0.055, 4};
-      PIDValues pid1 = {-0.55,-0.170,0.04, 4.7};
-      PIDValues pid2 = {-0.54,-0.158, 0.042, 6.2};
-      float ki0 = -0.003f, ki1 = -0.004f, ki2 = -0.0055f;
-      PIDValues result;
-      if (y_height <= y1) 
+      const float y0 = 0.0f, y1 = 80.0f, y2 = 150.0f;
+      const PIDValues pid0 = {-0.55f, -0.183f, 0.055f, 4.0f};
+      const PIDValues pid1 = {-0.55f, -0.170f, 0.040f, 4.7f};
+      const PIDValues pid2 = {-0.54f, -0.158f, 0.042f, 6.2f};
+      const float ki0 = -0.003f, ki1 = -0.004f, ki2 = -0.0055f;
+      PIDValues result = {vel_kp, balance_kp, balance_kd, robot_kp};
+      float height = static_cast<float>(y_height);
+      if (height < y0)
+      {
+          height = y0;
+      }
+      if (height > y2)
+      {
+          height = y2;
+      }
+
+      if (height <= y1) 
       {
           speed_limit = 5;
-          float t = (y_height - y0) / (y1 - y0);
+          float t = (height - y0) / (y1 - y0);
           vel_kp = pid0.linear_vel_kp + t * (pid1.linear_vel_kp - pid0.linear_vel_kp);
           balance_kp = pid0.linear_balance_kp + t * (pid1.linear_balance_kp - pid0.linear_balance_kp);
           balance_kd = pid0.linear_balance_kd + t * (pid1.linear_balance_kd - pid0.linear_balance_kd);
@@ -129,7 +140,7 @@ PIDValues  interpolatePID(int y_height) {
       else 
       {
           speed_limit = 3;
-          float t = (y_height - y1) / (y2 - y1);
+          float t = (height - y1) / (y2 - y1);
           vel_kp = pid1.linear_vel_kp + t * (pid2.linear_vel_kp - pid1.linear_vel_kp);
           balance_kp = pid1.linear_balance_kp + t * (pid2.linear_balance_kp - pid1.linear_balance_kp);
           balance_kd = pid1.linear_balance_kd + t * (pid2.linear_balance_kd - pid1.linear_balance_kd);
@@ -138,6 +149,9 @@ PIDValues  interpolatePID(int y_height) {
       }
       return result;
   }
+
+  PIDValues result = {vel_kp, balance_kp, balance_kd, robot_kp};
+  return result;
 }
 
 static bool parseFloatList(const String &input, float *values, int expectedCount)

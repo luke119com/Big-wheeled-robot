@@ -12,8 +12,10 @@ public:
 private:
   void setupRoutes();
   void loadPreferences();
+  void loadTuningConfig();
   void saveCredentials(const String &ssid, const String &password);
   void saveDeviceName(const String &deviceName);
+  void saveTuningConfig();
   void clearCredentials();
   void initIdentity();
   void refreshIdentity();
@@ -28,16 +30,20 @@ private:
   void handleSave();
   void handleForget();
   void handleRescan();
+  void handleTuningSave();
+  void handleStatusApi();
   void handleNotFound();
   void processPendingCredentials();
   void refreshNetworkOptions();
   String buildRootPage();
+  String buildStatusJson() const;
   String buildNetworkOptions();
   String getModeLabel() const;
   String getConnectionDetails() const;
   String getHostUrl() const;
   String getStaUrl() const;
   static String htmlEscape(const String &value);
+  static String jsonEscape(const String &value);
   static String trimToLength(const String &value, size_t maxLen);
   static String sanitizeHostLabel(const String &value);
   static String sanitizeDisplayName(const String &value);
@@ -60,6 +66,7 @@ private:
   bool mdnsActive_ = false;
   bool serverStarted_ = false;
   bool pendingCredentials_ = false;
+  bool preferencesReady_ = false;
 };
 
 extern WiFiManagerPortal wifiManagerPortal;
