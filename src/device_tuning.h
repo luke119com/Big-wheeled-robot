@@ -1,25 +1,38 @@
 #ifndef DEVICE_TUNING_H
 #define DEVICE_TUNING_H
 
-struct HeightPitchPoint
+constexpr int kHeightProfileCount = 16;
+constexpr int kHeightProfileStep = 10;
+
+struct HeightProfile
 {
-  float height;
-  float pitch;
+  int offset;
+  float balancePoint;
+  float velKp;
+  float balanceKp;
+  float balanceKd;
+  float balanceKi;
+  float robotKp;
+  int speedLimit;
 };
 
 struct DeviceTuningConfig
 {
-  float initPitch;
   float leftHeight;
   float rightHeight;
-  HeightPitchPoint pitchMap[3];
+  HeightProfile profiles[kHeightProfileCount];
 };
 
 DeviceTuningConfig getDeviceTuningConfig();
 void applyDeviceTuningConfig(const DeviceTuningConfig &config);
-float getPitchMapValueForHeight(float height);
+
+int clampHeightOffset(int offset);
+int getHeightProfileIndexForOffset(int offset);
 float getCurrentHeightForPitchControl();
 float getCurrentPitchTarget();
+HeightProfile getHeightProfileByIndex(int index);
+HeightProfile getHeightProfileForOffset(int offset);
+HeightProfile getCurrentHeightProfile();
 void updateBalanceOffsetByCurrentHeight();
 
 #endif

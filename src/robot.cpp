@@ -39,6 +39,7 @@ float motor1_vel, motor2_vel;
 int lastZeparamremoteValue = 0; // 上次输出的 ZeparamremoteValue
 int EH = 0;
 float Tartget_Roll_angle;
+float accX, accY, accZ, imuTemp;
 float roll, pitch, yaw, init_pitch; //陀螺仪xyz轴值
 float gyroX, gyroY, gyroZ;//陀螺仪xyz轴加速度值
 float target_roll = 0.0;

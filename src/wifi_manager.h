@@ -31,6 +31,7 @@ private:
   void handleForget();
   void handleRescan();
   void handleTuningSave();
+  void handleHeightSet();
   void handleStatusApi();
   void handleNotFound();
   void processPendingCredentials();

@@ -112,11 +112,19 @@ void Open_thread_function()
 
 void IMUTask(void *pvParameters)
 {
+  accX = mpu6050.getAccX();
+  accY = mpu6050.getAccY();
+  accZ = mpu6050.getAccZ();
+  imuTemp = mpu6050.getTemp();
   gyroY = mpu6050.getGyroY();
   roll = mpu6050.getAngleX();
   while (true)
   {
     mpu6050.update();
+    accX = mpu6050.getAccX();
+    accY = mpu6050.getAccY();
+    accZ = mpu6050.getAccZ();
+    imuTemp = mpu6050.getTemp();
     pitch = mpu6050.getAngleY();
     yaw = mpu6050.getAngleZ();
     gyroX = mpu6050.getGyroX();

@@ -33,6 +33,7 @@ extern float forwardBackward ;
 extern float motor1_vel, motor2_vel;
 // 陀螺仪读取参数
 extern float roll, pitch, yaw, init_pitch;
+extern float accX, accY, accZ, imuTemp;
 extern float gyroX, gyroY, gyroZ;
 extern float balance_offset;
 extern int ZeparamremoteValue; //腿高变化

@@ -1,6 +1,7 @@
 #include "wifi_manager.h"
 
 #include "device_tuning.h"
+#include "PS2.h"
 #include "pid.h"
 #include "robot.h"
 
@@ -16,15 +17,8 @@ constexpr const char *kPrefsNamespace = "wifi";
 constexpr const char *kPrefsSsidKey = "ssid";
 constexpr const char *kPrefsPassKey = "password";
 constexpr const char *kPrefsNameKey = "device_name";
-constexpr const char *kPrefsInitPitchKey = "init_pitch";
 constexpr const char *kPrefsLeftYKey = "left_y";
 constexpr const char *kPrefsRightYKey = "right_y";
-constexpr const char *kPrefsMapH0Key = "map_h0";
-constexpr const char *kPrefsMapH1Key = "map_h1";
-constexpr const char *kPrefsMapH2Key = "map_h2";
-constexpr const char *kPrefsMapP0Key = "map_p0";
-constexpr const char *kPrefsMapP1Key = "map_p1";
-constexpr const char *kPrefsMapP2Key = "map_p2";
 constexpr const char *kPortalApPassword = "87654321";
 constexpr uint32_t kConnectTimeoutMs = 15000;
 constexpr uint16_t kDnsPort = 53;
@@ -52,6 +46,30 @@ float readArgFloat(const String &name, float fallback)
   }
 
   return raw.toFloat();
+}
+
+int readArgInt(const String &name, int fallback)
+{
+  if (!g_server.hasArg(name))
+  {
+    return fallback;
+  }
+
+  String raw = g_server.arg(name);
+  raw.trim();
+  if (raw.isEmpty())
+  {
+    return fallback;
+  }
+
+  return raw.toInt();
+}
+
+String buildProfileKey(const char *prefix, int index)
+{
+  char key[12];
+  snprintf(key, sizeof(key), "%s%02d", prefix, index);
+  return String(key);
 }
 }
 
@@ -99,6 +117,7 @@ void WiFiManagerPortal::setupRoutes()
 {
   g_server.on("/", HTTP_GET, [this]() { handleRoot(); });
   g_server.on("/api/status", HTTP_GET, [this]() { handleStatusApi(); });
+  g_server.on("/api/height", HTTP_POST, [this]() { handleHeightSet(); });
   g_server.on("/save", HTTP_POST, [this]() { handleSave(); });
   g_server.on("/tuning", HTTP_POST, [this]() { handleTuningSave(); });
   g_server.on("/forget", HTTP_POST, [this]() { handleForget(); });
@@ -132,15 +151,29 @@ void WiFiManagerPortal::loadTuningConfig()
     applyDeviceTuningConfig(config);
     return;
   }
-  config.initPitch = g_preferences.isKey(kPrefsInitPitchKey) ? g_preferences.getFloat(kPrefsInitPitchKey, config.initPitch) : config.initPitch;
   config.leftHeight = g_preferences.isKey(kPrefsLeftYKey) ? g_preferences.getFloat(kPrefsLeftYKey, config.leftHeight) : config.leftHeight;
   config.rightHeight = g_preferences.isKey(kPrefsRightYKey) ? g_preferences.getFloat(kPrefsRightYKey, config.rightHeight) : config.rightHeight;
-  config.pitchMap[0].height = g_preferences.isKey(kPrefsMapH0Key) ? g_preferences.getFloat(kPrefsMapH0Key, config.pitchMap[0].height) : config.pitchMap[0].height;
-  config.pitchMap[1].height = g_preferences.isKey(kPrefsMapH1Key) ? g_preferences.getFloat(kPrefsMapH1Key, config.pitchMap[1].height) : config.pitchMap[1].height;
-  config.pitchMap[2].height = g_preferences.isKey(kPrefsMapH2Key) ? g_preferences.getFloat(kPrefsMapH2Key, config.pitchMap[2].height) : config.pitchMap[2].height;
-  config.pitchMap[0].pitch = g_preferences.isKey(kPrefsMapP0Key) ? g_preferences.getFloat(kPrefsMapP0Key, config.pitchMap[0].pitch) : config.pitchMap[0].pitch;
-  config.pitchMap[1].pitch = g_preferences.isKey(kPrefsMapP1Key) ? g_preferences.getFloat(kPrefsMapP1Key, config.pitchMap[1].pitch) : config.pitchMap[1].pitch;
-  config.pitchMap[2].pitch = g_preferences.isKey(kPrefsMapP2Key) ? g_preferences.getFloat(kPrefsMapP2Key, config.pitchMap[2].pitch) : config.pitchMap[2].pitch;
+
+  for (int i = 0; i < kHeightProfileCount; ++i)
+  {
+    HeightProfile &profile = config.profiles[i];
+    const String balancePointKey = buildProfileKey("bp", i);
+    const String velKpKey = buildProfileKey("vk", i);
+    const String balanceKpKey = buildProfileKey("bk", i);
+    const String balanceKdKey = buildProfileKey("bd", i);
+    const String balanceKiKey = buildProfileKey("bi", i);
+    const String robotKpKey = buildProfileKey("rk", i);
+    const String speedLimitKey = buildProfileKey("sl", i);
+
+    profile.balancePoint = g_preferences.isKey(balancePointKey.c_str()) ? g_preferences.getFloat(balancePointKey.c_str(), profile.balancePoint) : profile.balancePoint;
+    profile.velKp = g_preferences.isKey(velKpKey.c_str()) ? g_preferences.getFloat(velKpKey.c_str(), profile.velKp) : profile.velKp;
+    profile.balanceKp = g_preferences.isKey(balanceKpKey.c_str()) ? g_preferences.getFloat(balanceKpKey.c_str(), profile.balanceKp) : profile.balanceKp;
+    profile.balanceKd = g_preferences.isKey(balanceKdKey.c_str()) ? g_preferences.getFloat(balanceKdKey.c_str(), profile.balanceKd) : profile.balanceKd;
+    profile.balanceKi = g_preferences.isKey(balanceKiKey.c_str()) ? g_preferences.getFloat(balanceKiKey.c_str(), profile.balanceKi) : profile.balanceKi;
+    profile.robotKp = g_preferences.isKey(robotKpKey.c_str()) ? g_preferences.getFloat(robotKpKey.c_str(), profile.robotKp) : profile.robotKp;
+    profile.speedLimit = g_preferences.isKey(speedLimitKey.c_str()) ? g_preferences.getInt(speedLimitKey.c_str(), profile.speedLimit) : profile.speedLimit;
+  }
+
   applyDeviceTuningConfig(config);
 }
 
@@ -172,15 +205,27 @@ void WiFiManagerPortal::saveTuningConfig()
     return;
   }
   const DeviceTuningConfig config = getDeviceTuningConfig();
-  g_preferences.putFloat(kPrefsInitPitchKey, config.initPitch);
   g_preferences.putFloat(kPrefsLeftYKey, config.leftHeight);
   g_preferences.putFloat(kPrefsRightYKey, config.rightHeight);
-  g_preferences.putFloat(kPrefsMapH0Key, config.pitchMap[0].height);
-  g_preferences.putFloat(kPrefsMapH1Key, config.pitchMap[1].height);
-  g_preferences.putFloat(kPrefsMapH2Key, config.pitchMap[2].height);
-  g_preferences.putFloat(kPrefsMapP0Key, config.pitchMap[0].pitch);
-  g_preferences.putFloat(kPrefsMapP1Key, config.pitchMap[1].pitch);
-  g_preferences.putFloat(kPrefsMapP2Key, config.pitchMap[2].pitch);
+  for (int i = 0; i < kHeightProfileCount; ++i)
+  {
+    const HeightProfile &profile = config.profiles[i];
+    const String balancePointKey = buildProfileKey("bp", i);
+    const String velKpKey = buildProfileKey("vk", i);
+    const String balanceKpKey = buildProfileKey("bk", i);
+    const String balanceKdKey = buildProfileKey("bd", i);
+    const String balanceKiKey = buildProfileKey("bi", i);
+    const String robotKpKey = buildProfileKey("rk", i);
+    const String speedLimitKey = buildProfileKey("sl", i);
+
+    g_preferences.putFloat(balancePointKey.c_str(), profile.balancePoint);
+    g_preferences.putFloat(velKpKey.c_str(), profile.velKp);
+    g_preferences.putFloat(balanceKpKey.c_str(), profile.balanceKp);
+    g_preferences.putFloat(balanceKdKey.c_str(), profile.balanceKd);
+    g_preferences.putFloat(balanceKiKey.c_str(), profile.balanceKi);
+    g_preferences.putFloat(robotKpKey.c_str(), profile.robotKp);
+    g_preferences.putInt(speedLimitKey.c_str(), profile.speedLimit);
+  }
 }
 
 void WiFiManagerPortal::clearCredentials()
@@ -444,20 +489,33 @@ void WiFiManagerPortal::handleRescan()
 void WiFiManagerPortal::handleTuningSave()
 {
   DeviceTuningConfig config = getDeviceTuningConfig();
-  config.initPitch = readArgFloat("init_pitch", config.initPitch);
   config.leftHeight = readArgFloat("left_height", config.leftHeight);
   config.rightHeight = readArgFloat("right_height", config.rightHeight);
-  config.pitchMap[0].height = readArgFloat("map_height_0", config.pitchMap[0].height);
-  config.pitchMap[1].height = readArgFloat("map_height_1", config.pitchMap[1].height);
-  config.pitchMap[2].height = readArgFloat("map_height_2", config.pitchMap[2].height);
-  config.pitchMap[0].pitch = readArgFloat("map_pitch_0", config.pitchMap[0].pitch);
-  config.pitchMap[1].pitch = readArgFloat("map_pitch_1", config.pitchMap[1].pitch);
-  config.pitchMap[2].pitch = readArgFloat("map_pitch_2", config.pitchMap[2].pitch);
+  for (int i = 0; i < kHeightProfileCount; ++i)
+  {
+    HeightProfile &profile = config.profiles[i];
+    profile.balancePoint = readArgFloat("balance_point_" + String(i), profile.balancePoint);
+    profile.velKp = readArgFloat("vel_kp_" + String(i), profile.velKp);
+    profile.balanceKp = readArgFloat("balance_kp_" + String(i), profile.balanceKp);
+    profile.balanceKd = readArgFloat("balance_kd_" + String(i), profile.balanceKd);
+    profile.balanceKi = readArgFloat("balance_ki_" + String(i), profile.balanceKi);
+    profile.robotKp = readArgFloat("robot_kp_" + String(i), profile.robotKp);
+    profile.speedLimit = readArgInt("speed_limit_" + String(i), profile.speedLimit);
+  }
 
   applyDeviceTuningConfig(config);
   saveTuningConfig();
-  statusMessage_ = "Tuning values updated.";
+  statusMessage_ = "Height profiles updated and saved.";
   g_server.send(200, "text/html; charset=utf-8", buildRootPage());
+}
+
+void WiFiManagerPortal::handleHeightSet()
+{
+  ZeparamremoteValue = clampHeightOffset(readArgInt("offset", ZeparamremoteValue));
+  updateBalanceOffsetByCurrentHeight();
+  statusMessage_ = "Live height offset updated from web slider.";
+  g_server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  g_server.send(200, "application/json; charset=utf-8", buildStatusJson());
 }
 
 void WiFiManagerPortal::handleStatusApi()
@@ -531,19 +589,27 @@ void WiFiManagerPortal::refreshNetworkOptions()
 String WiFiManagerPortal::buildStatusJson() const
 {
   const DeviceTuningConfig config = getDeviceTuningConfig();
+  const int activeIndex = getHeightProfileIndexForOffset(ZeparamremoteValue);
+  const HeightProfile activeProfile = getHeightProfileByIndex(activeIndex);
 
   String json;
-  json.reserve(1400);
+  json.reserve(4200);
   json += "{";
   json += "\"mode\":\"" + jsonEscape(getModeLabel()) + "\",";
   json += "\"status\":\"" + jsonEscape(statusMessage_) + "\",";
   json += "\"network\":\"" + jsonEscape(getConnectionDetails()) + "\",";
   json += "\"display_name\":\"" + jsonEscape(displayName_) + "\",";
   json += "\"imu\":{";
+  json += "\"acc_x\":" + String(accX, 4) + ",";
+  json += "\"acc_y\":" + String(accY, 4) + ",";
+  json += "\"acc_z\":" + String(accZ, 4) + ",";
   json += "\"roll\":" + String(roll, 3) + ",";
   json += "\"pitch\":" + String(pitch, 3) + ",";
   json += "\"yaw\":" + String(yaw, 3) + ",";
-  json += "\"gyro_y\":" + String(gyroY, 3);
+  json += "\"gyro_x\":" + String(gyroX, 3) + ",";
+  json += "\"gyro_y\":" + String(gyroY, 3) + ",";
+  json += "\"gyro_z\":" + String(gyroZ, 3) + ",";
+  json += "\"temp_c\":" + String(imuTemp, 2);
   json += "},";
   json += "\"control\":{";
   json += "\"vel_kp\":" + String(vel_kp, 4) + ",";
@@ -558,11 +624,12 @@ String WiFiManagerPortal::buildStatusJson() const
   json += "\"wheel_right_velocity\":" + String(motor2_vel, 3);
   json += "},";
   json += "\"tuning\":{";
-  json += "\"init_pitch\":" + String(config.initPitch, 3) + ",";
-  json += "\"balance_offset\":" + String(balance_offset, 3) + ",";
   json += "\"current_height\":" + String(getCurrentHeightForPitchControl(), 3) + ",";
   json += "\"current_pitch_target\":" + String(getCurrentPitchTarget(), 3) + ",";
-  json += "\"height_offset\":" + String(static_cast<float>(ZeparamremoteValue), 3) + ",";
+  json += "\"balance_offset\":" + String(balance_offset, 3) + ",";
+  json += "\"height_offset\":" + String(static_cast<float>(clampHeightOffset(ZeparamremoteValue)), 3) + ",";
+  json += "\"active_step\":" + String(activeIndex) + ",";
+  json += "\"active_offset\":" + String(activeProfile.offset) + ",";
   json += "\"left_height\":" + String(leftY, 3) + ",";
   json += "\"right_height\":" + String(rightY, 3) + ",";
   json += "\"left_target_y\":" + String(Y1, 3) + ",";
@@ -570,19 +637,31 @@ String WiFiManagerPortal::buildStatusJson() const
   json += "},";
   json += "\"ik\":{";
   json += "\"serial_mode\":" + String(serialFootPoseMode ? "true" : "false") + ",";
+  json += "\"ps2_connected\":" + String(ps2IsConnected() ? "true" : "false") + ",";
   json += "\"left_x\":" + String(x1, 3) + ",";
   json += "\"right_x\":" + String(x2, 3) + ",";
   json += "\"serial_left_y\":" + String(serialLeftTargetY, 3) + ",";
   json += "\"serial_right_y\":" + String(serialRightTargetY, 3);
   json += "},";
-  json += "\"pitch_map\":[";
-  for (int i = 0; i < 3; ++i)
+  json += "\"profiles\":[";
+  for (int i = 0; i < kHeightProfileCount; ++i)
   {
+    const HeightProfile profile = config.profiles[i];
     if (i > 0)
     {
       json += ",";
     }
-    json += "{\"height\":" + String(config.pitchMap[i].height, 3) + ",\"pitch\":" + String(config.pitchMap[i].pitch, 3) + "}";
+    json += "{";
+    json += "\"index\":" + String(i) + ",";
+    json += "\"offset\":" + String(profile.offset) + ",";
+    json += "\"balance_point\":" + String(profile.balancePoint, 3) + ",";
+    json += "\"vel_kp\":" + String(profile.velKp, 4) + ",";
+    json += "\"balance_kp\":" + String(profile.balanceKp, 4) + ",";
+    json += "\"balance_kd\":" + String(profile.balanceKd, 4) + ",";
+    json += "\"balance_ki\":" + String(profile.balanceKi, 4) + ",";
+    json += "\"robot_kp\":" + String(profile.robotKp, 4) + ",";
+    json += "\"speed_limit\":" + String(profile.speedLimit);
+    json += "}";
   }
   json += "]}";
   return json;
@@ -591,9 +670,10 @@ String WiFiManagerPortal::buildStatusJson() const
 String WiFiManagerPortal::buildRootPage()
 {
   const DeviceTuningConfig config = getDeviceTuningConfig();
+  const float baseAverageHeight = (config.leftHeight + config.rightHeight) * 0.5f;
 
   String html;
-  html.reserve(18000);
+  html.reserve(48000);
 
   html += "<!DOCTYPE html><html><head><meta charset='utf-8'>";
   html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
@@ -613,16 +693,26 @@ p{margin:0;color:var(--muted);line-height:1.6}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}.col-4{grid-column:span 4}.col-6{grid-column:span 6}.col-8{grid-column:span 8}.col-12{grid-column:span 12}
 .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat-card{background:var(--panel-2);border:1px solid var(--line);border-radius:18px;padding:16px}.stat-card span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.stat-card strong{display:block;margin-top:8px;font-size:28px}
 .kv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kv{padding:14px;border-radius:16px;background:var(--panel-2);border:1px solid var(--line)}.kv span{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.kv strong{font-size:18px}
+.profile-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.profile-card{padding:14px;border-radius:16px;background:var(--panel-2);border:1px solid var(--line)}
+.profile-card.active{border-color:var(--accent);box-shadow:inset 0 0 0 1px rgba(15,118,110,.18);background:#ebfbf7}
+.profile-card span{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
+.profile-card strong{display:block;font-size:18px}
 .mono{font-family:Consolas,"Courier New",monospace}
 label{display:block;margin:14px 0 8px;font-weight:700;font-size:14px}input,select{width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:#fff;color:var(--text);font-size:15px}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.btn{display:inline-flex;align-items:center;justify-content:center;min-width:180px;padding:12px 18px;border:0;border-radius:14px;background:linear-gradient(135deg,var(--accent),#155e75);color:#fff;font-weight:700;cursor:pointer}.btn.secondary{background:#415954}
-.map-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:10px;align-items:end}.hint{margin-top:10px;font-size:13px}.subtle{color:var(--muted);font-size:13px}
-@media(max-width:980px){.hero,.stat-grid{grid-template-columns:1fr}.col-4,.col-6,.col-8,.col-12{grid-column:span 12}.kv-grid{grid-template-columns:1fr}.map-grid{grid-template-columns:1fr}}
+.table-scroll{overflow-x:auto}.profile-table{width:100%;border-collapse:collapse;min-width:1080px}.profile-table th,.profile-table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}.profile-table th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.range-wrap{padding:18px;border-radius:18px;background:var(--panel-2);border:1px solid var(--line)}.range-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.range-value{font-size:26px;font-weight:700}
+input[type=range]{padding:0;border:0;background:transparent}
+.chart-box{padding:14px;border-radius:18px;background:var(--panel-2);border:1px solid var(--line)}.chart-box canvas{display:block;width:100%;height:220px;background:#fff;border-radius:14px;border:1px solid #e5ece8}
+.record-box textarea{width:100%;min-height:180px;margin-top:12px;padding:12px 14px;border-radius:14px;border:1px solid var(--line);font-family:Consolas,"Courier New",monospace;font-size:12px;resize:vertical}
+.small{font-size:12px;color:var(--muted)}.hint{margin-top:10px;font-size:13px}.subtle{color:var(--muted);font-size:13px}
+@media(max-width:980px){.hero,.stat-grid,.profile-grid{grid-template-columns:1fr}.col-4,.col-6,.col-8,.col-12{grid-column:span 12}.kv-grid{grid-template-columns:1fr}}
 </style>)HTML";
   html += "</head><body><div class='app'>";
   html += "<div class='hero'>";
   html += "<section class='surface'><p class='eyebrow'>Embedded Control Portal</p><h1>SF Wheel Console</h1>";
-  html += "<p>Live telemetry, pitch tuning, and Wi-Fi setup for the robot in one page.</p>";
+  html += "<p>Live telemetry, PS2 height profiles, and Wi-Fi setup in one page.</p>";
   html += "<div class='chip-row'><div class='chip'>Mode: <span id='modeChip'>" + htmlEscape(getModeLabel()) + "</span></div>";
   html += "<div class='chip'>Network: <span id='networkChip'>" + htmlEscape(getConnectionDetails()) + "</span></div></div></section>";
   html += "<section class='surface'><h2>Portal Status</h2>";
@@ -643,9 +733,16 @@ label{display:block;margin:14px 0 8px;font-weight:700;font-size:14px}input,selec
   html += "<div class='col-12 surface'><div class='stat-grid'>";
   html += "<div class='stat-card'><span>Pitch</span><strong id='statPitch'>--</strong></div>";
   html += "<div class='stat-card'><span>Current Height</span><strong id='statHeight'>--</strong></div>";
-  html += "<div class='stat-card'><span>Pitch Target</span><strong id='statPitchTarget'>--</strong></div>";
-  html += "<div class='stat-card'><span>Wheel Mode</span><strong id='statSerialMode'>--</strong></div>";
+  html += "<div class='stat-card'><span>Balance Point</span><strong id='statPitchTarget'>--</strong></div>";
+  html += "<div class='stat-card'><span>Active Step</span><strong id='statActiveStep'>--</strong></div>";
   html += "</div></div>";
+  html += "<div class='col-12 surface'><h2>Live Height Control</h2>";
+  html += "<div class='range-wrap'><div class='range-head'><div><strong>PS2 Height Offset</strong><div class='small'>Slider uses the same 0~150 / step 10 scale as the PS2 PAD UP and PAD DOWN.</div></div><div class='range-value' id='liveOffsetLabel'>--</div></div>";
+  html += "<input id='heightSlider' type='range' min='0' max='150' step='10' value='" + String(clampHeightOffset(ZeparamremoteValue)) + "'>";
+  html += "<div class='kv-grid' style='margin-top:12px'>";
+  html += "<div class='kv'><span>Active Profile</span><strong id='sliderActiveProfile'>--</strong></div>";
+  html += "<div class='kv'><span>Estimated Height</span><strong id='sliderEstimatedHeight'>--</strong></div>";
+  html += "</div></div></div>";
   html += "<div class='col-6 surface'><h2>IMU And Drive</h2><div class='kv-grid'>";
   html += "<div class='kv'><span>Roll</span><strong id='imuRoll'>--</strong></div>";
   html += "<div class='kv'><span>Yaw</span><strong id='imuYaw'>--</strong></div>";
@@ -665,12 +762,13 @@ label{display:block;margin:14px 0 8px;font-weight:700;font-size:14px}input,selec
   html += "<div class='kv'><span>speed_limit</span><strong id='pidSpeedLimit'>--</strong></div>";
   html += "</div></div>";
   html += "<div class='col-6 surface'><h2>Height And Pose</h2><div class='kv-grid'>";
-  html += "<div class='kv'><span>Init Pitch</span><strong id='tuningInitPitch'>--</strong></div>";
   html += "<div class='kv'><span>Balance Offset</span><strong id='tuningBalanceOffset'>--</strong></div>";
   html += "<div class='kv'><span>Left Base Height</span><strong id='tuningLeftHeight'>--</strong></div>";
   html += "<div class='kv'><span>Right Base Height</span><strong id='tuningRightHeight'>--</strong></div>";
   html += "<div class='kv'><span>Left Target Y</span><strong id='tuningLeftTargetY'>--</strong></div>";
   html += "<div class='kv'><span>Right Target Y</span><strong id='tuningRightTargetY'>--</strong></div>";
+  html += "<div class='kv'><span>PS2 Height Offset</span><strong id='tuningHeightOffset'>--</strong></div>";
+  html += "<div class='kv'><span>Wheel Mode</span><strong id='statSerialMode'>--</strong></div>";
   html += "</div></div>";
   html += "<div class='col-6 surface'><h2>IK Status</h2><div class='kv-grid'>";
   html += "<div class='kv'><span>Left X</span><strong id='ikLeftX'>--</strong></div>";
@@ -678,23 +776,53 @@ label{display:block;margin:14px 0 8px;font-weight:700;font-size:14px}input,selec
   html += "<div class='kv'><span>Serial Left Y</span><strong id='ikSerialLeftY'>--</strong></div>";
   html += "<div class='kv'><span>Serial Right Y</span><strong id='ikSerialRightY'>--</strong></div>";
   html += "</div><p class='hint'>API: <span id='apiHealth'>waiting</span></p></div>";
-  html += "<div class='col-12 surface'><h2>Height To Pitch Map</h2><div id='pitchMapStatus' class='kv-grid'></div></div>";
+  html += "<div class='col-12 surface'><h2>PS2 Height Profiles</h2><div id='profileStatusGrid' class='profile-grid'></div></div>";
+  html += "<div class='col-6 surface'><h2>IMU Raw Values</h2><div class='kv-grid'>";
+  html += "<div class='kv'><span>Acc X</span><strong id='imuAccX'>--</strong></div>";
+  html += "<div class='kv'><span>Acc Y</span><strong id='imuAccY'>--</strong></div>";
+  html += "<div class='kv'><span>Acc Z</span><strong id='imuAccZ'>--</strong></div>";
+  html += "<div class='kv'><span>Gyro X</span><strong id='imuGyroX'>--</strong></div>";
+  html += "<div class='kv'><span>Gyro Y Raw</span><strong id='imuGyroYRaw'>--</strong></div>";
+  html += "<div class='kv'><span>Gyro Z</span><strong id='imuGyroZ'>--</strong></div>";
+  html += "<div class='kv'><span>IMU Temp</span><strong id='imuTemp'>--</strong></div>";
+  html += "<div class='kv'><span>PS2 Link</span><strong id='ps2Link'>--</strong></div>";
+  html += "</div></div>";
+  html += "<div class='col-6 surface record-box'><h2>Record And Export</h2><p>Record live telemetry while you tune, then export CSV text for later analysis.</p>";
+  html += "<div class='btn-row'><button type='button' id='startRecord' class='btn'>Start Record</button><button type='button' id='stopRecord' class='btn secondary'>Stop</button><button type='button' id='clearRecord' class='btn secondary'>Clear</button><button type='button' id='exportRecord' class='btn secondary'>Export CSV</button></div>";
+  html += "<p class='hint'>Samples: <span id='recordCount'>0</span></p><textarea id='recordOutput' placeholder='Recorded CSV will appear here'></textarea></div>";
+  html += "<div class='col-12 surface'><h2>Live Charts</h2><div class='grid'>";
+  html += "<div class='col-4'><div class='chart-box'><h3>Pitch / Balance</h3><canvas id='chartPitch' width='320' height='220'></canvas></div></div>";
+  html += "<div class='col-4'><div class='chart-box'><h3>Gyro / Acc Z</h3><canvas id='chartImu' width='320' height='220'></canvas></div></div>";
+  html += "<div class='col-4'><div class='chart-box'><h3>Height / Speed</h3><canvas id='chartHeight' width='320' height='220'></canvas></div></div>";
+  html += "</div></div>";
   html += "</div></section>";
 
   html += "<section id='panel-tuning' class='panel'><div class='grid'>";
-  html += "<div class='col-12 surface'><h2>Tuning Setup</h2><p>Base height is the left/right wheel stance. The pitch target used by balance control is <span class='mono'>init_pitch + interpolated(height map)</span>.</p>";
+  html += "<div class='col-12 surface'><h2>Tuning Setup</h2><p>The table below is locked to the PS2 height steps: <span class='mono'>0, 10, 20, ... 150</span>. Each step has its own balance point and PID values. Saving writes to NVS and survives reboot.</p>";
   html += "<form method='post' action='/tuning'><div class='grid'>";
-  html += "<div class='col-4'><label for='init_pitch'>Init Pitch (deg)</label><input id='init_pitch' name='init_pitch' type='number' step='0.01' value='" + String(config.initPitch, 2) + "'></div>";
-  html += "<div class='col-4'><label for='left_height'>Left Height (mm)</label><input id='left_height' name='left_height' type='number' step='0.1' value='" + String(config.leftHeight, 1) + "'></div>";
-  html += "<div class='col-4'><label for='right_height'>Right Height (mm)</label><input id='right_height' name='right_height' type='number' step='0.1' value='" + String(config.rightHeight, 1) + "'></div>";
-  html += "<div class='col-12'><h3>Height To Pitch Points</h3><p class='subtle'>Use three points. The firmware sorts them by height and linearly interpolates between them.</p></div>";
-  for (int i = 0; i < 3; ++i)
+  html += "<div class='col-6'><label for='left_height'>Left Base Height (mm)</label><input id='left_height' name='left_height' type='number' step='0.1' value='" + String(config.leftHeight, 1) + "'></div>";
+  html += "<div class='col-6'><label for='right_height'>Right Base Height (mm)</label><input id='right_height' name='right_height' type='number' step='0.1' value='" + String(config.rightHeight, 1) + "'></div>";
+  html += "<div class='col-12'><h3>Height Step Table</h3><p class='subtle'>Estimated height = base average height + PS2 offset. The offset itself stays aligned with the PS2 buttons and is not editable.</p></div>";
+  html += "<div class='col-12'><div class='table-scroll'><table class='profile-table'><thead><tr>";
+  html += "<th>Step</th><th>PS2 Offset</th><th>Est. Height</th><th>Balance Point</th><th>vel_kp</th><th>balance_kp</th><th>balance_kd</th><th>balance_ki</th><th>robot_kp</th><th>speed_limit</th>";
+  html += "</tr></thead><tbody>";
+  for (int i = 0; i < kHeightProfileCount; ++i)
   {
-    html += "<div class='col-12'><div class='map-grid'>";
-    html += "<div><label for='map_height_" + String(i) + "'>Point " + String(i + 1) + " Height (mm)</label><input id='map_height_" + String(i) + "' name='map_height_" + String(i) + "' type='number' step='0.1' value='" + String(config.pitchMap[i].height, 1) + "'></div>";
-    html += "<div><label for='map_pitch_" + String(i) + "'>Point " + String(i + 1) + " Pitch (deg)</label><input id='map_pitch_" + String(i) + "' name='map_pitch_" + String(i) + "' type='number' step='0.01' value='" + String(config.pitchMap[i].pitch, 2) + "'></div>";
-    html += "</div></div>";
+    const HeightProfile &profile = config.profiles[i];
+    html += "<tr>";
+    html += "<td><strong>" + String(i) + "</strong></td>";
+    html += "<td><span class='mono'>" + String(profile.offset) + "</span></td>";
+    html += "<td>" + String(baseAverageHeight + static_cast<float>(profile.offset), 1) + " mm</td>";
+    html += "<td><input name='balance_point_" + String(i) + "' type='number' step='0.01' value='" + String(profile.balancePoint, 3) + "'></td>";
+    html += "<td><input name='vel_kp_" + String(i) + "' type='number' step='0.001' value='" + String(profile.velKp, 4) + "'></td>";
+    html += "<td><input name='balance_kp_" + String(i) + "' type='number' step='0.001' value='" + String(profile.balanceKp, 4) + "'></td>";
+    html += "<td><input name='balance_kd_" + String(i) + "' type='number' step='0.001' value='" + String(profile.balanceKd, 4) + "'></td>";
+    html += "<td><input name='balance_ki_" + String(i) + "' type='number' step='0.001' value='" + String(profile.balanceKi, 4) + "'></td>";
+    html += "<td><input name='robot_kp_" + String(i) + "' type='number' step='0.001' value='" + String(profile.robotKp, 4) + "'></td>";
+    html += "<td><input name='speed_limit_" + String(i) + "' type='number' step='1' value='" + String(profile.speedLimit) + "'></td>";
+    html += "</tr>";
   }
+  html += "</tbody></table></div></div>";
   html += "<div class='col-12'><div class='btn-row'><button type='submit' class='btn'>Save Tuning</button></div></div>";
   html += "</div></form></div></div></section>";
 
@@ -729,6 +857,11 @@ label{display:block;margin:14px 0 8px;font-weight:700;font-size:14px}input,selec
   html += R"HTML(<script>
 const buttons=document.querySelectorAll('.menu-btn');
 const panels=document.querySelectorAll('.panel');
+const heightSlider=document.getElementById('heightSlider');
+const chartHistory=[];
+const maxChartSamples=120;
+let isRecording=false;
+let recordRows=[];
 function activatePanel(name){
   buttons.forEach((button)=>button.classList.toggle('active',button.dataset.panel===name));
   panels.forEach((panel)=>panel.classList.toggle('active',panel.id==='panel-'+name));
@@ -745,10 +878,151 @@ function fmt(value,digits){
   const number=Number(value);
   return Number.isFinite(number)?number.toFixed(digits):'--';
 }
-function renderPitchMap(points){
-  const host=document.getElementById('pitchMapStatus');
+function clampSliderValue(value){
+  const number=Number(value);
+  if(!Number.isFinite(number)){return 0;}
+  return Math.max(0,Math.min(150,Math.round(number/10)*10));
+}
+function renderProfiles(profiles,activeStep){
+  const host=document.getElementById('profileStatusGrid');
   if(!host){return;}
-  host.innerHTML=(points||[]).map((point,index)=>'<div class="kv"><span>Point '+(index+1)+'</span><strong>'+fmt(point.height,1)+' mm -> '+fmt(point.pitch,2)+' deg</strong></div>').join('');
+  host.innerHTML=(profiles||[]).map((profile)=>{
+    const active=Number(profile.index)===Number(activeStep)?' active':'';
+    return '<div class="profile-card'+active+'"><span>Step '+profile.index+' / offset '+profile.offset+'</span><strong>'+fmt(profile.balance_point,2)+' deg</strong><div class="small">vel '+fmt(profile.vel_kp,3)+' | bal '+fmt(profile.balance_kp,3)+' / '+fmt(profile.balance_kd,3)+' / '+fmt(profile.balance_ki,3)+' | robot '+fmt(profile.robot_kp,3)+' | limit '+String(profile.speed_limit)+'</div></div>';
+  }).join('');
+}
+function drawChart(canvasId,series,options){
+  const canvas=document.getElementById(canvasId);
+  if(!canvas){return;}
+  const ctx=canvas.getContext('2d');
+  const width=canvas.width;
+  const height=canvas.height;
+  ctx.clearRect(0,0,width,height);
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,width,height);
+  ctx.strokeStyle='#d7e2db';
+  for(let i=0;i<5;i++){
+    const y=12+(height-24)*i/4;
+    ctx.beginPath();
+    ctx.moveTo(10,y);
+    ctx.lineTo(width-10,y);
+    ctx.stroke();
+  }
+  const values=[];
+  series.forEach((item)=>item.data.forEach((value)=>{ if(Number.isFinite(value)){values.push(value);} }));
+  if(values.length===0){return;}
+  let min=Math.min(...values);
+  let max=Math.max(...values);
+  if(options&&Number.isFinite(options.min)){min=options.min;}
+  if(options&&Number.isFinite(options.max)){max=options.max;}
+  if(Math.abs(max-min)<1e-6){max=min+1;}
+  ctx.font='11px Trebuchet MS';
+  ctx.fillStyle='#5d6c66';
+  ctx.fillText(max.toFixed(2),12,16);
+  ctx.fillText(min.toFixed(2),12,height-8);
+  series.forEach((item)=>{
+    ctx.strokeStyle=item.color;
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    item.data.forEach((value,index)=>{
+      if(!Number.isFinite(value)){return;}
+      const x=12+(width-24)*(series[0].data.length<=1?0:index/(series[0].data.length-1));
+      const y=(height-12)-((value-min)/(max-min))*(height-24);
+      if(index===0){ctx.moveTo(x,y);}else{ctx.lineTo(x,y);}
+    });
+    ctx.stroke();
+  });
+}
+function pushChartSample(data){
+  chartHistory.push({
+    pitch:Number(pick(data.imu,'pitch',NaN)),
+    balancePoint:Number(pick(data.tuning,'current_pitch_target',NaN)),
+    gyroY:Number(pick(data.imu,'gyro_y',NaN)),
+    accZ:Number(pick(data.imu,'acc_z',NaN)),
+    currentHeight:Number(pick(data.tuning,'current_height',NaN)),
+    wheelLeft:Number(pick(data.control,'wheel_left_target',NaN)),
+    wheelRight:Number(pick(data.control,'wheel_right_target',NaN))
+  });
+  while(chartHistory.length>maxChartSamples){chartHistory.shift();}
+}
+function renderCharts(){
+  drawChart('chartPitch',[
+    {data:chartHistory.map((row)=>row.pitch),color:'#0f766e'},
+    {data:chartHistory.map((row)=>row.balancePoint),color:'#d97706'}
+  ]);
+  drawChart('chartImu',[
+    {data:chartHistory.map((row)=>row.gyroY),color:'#155e75'},
+    {data:chartHistory.map((row)=>row.accZ),color:'#7c3aed'}
+  ]);
+  drawChart('chartHeight',[
+    {data:chartHistory.map((row)=>row.currentHeight),color:'#15803d'},
+    {data:chartHistory.map((row)=>row.wheelLeft),color:'#b45309'},
+    {data:chartHistory.map((row)=>row.wheelRight),color:'#be123c'}
+  ]);
+}
+function updateRecordOutput(text){
+  const node=document.getElementById('recordOutput');
+  if(node){node.value=text;}
+}
+function updateRecordCount(){
+  setText('recordCount',String(recordRows.length));
+}
+function buildCsv(){
+  if(recordRows.length===0){return '';}
+  const headers=Object.keys(recordRows[0]);
+  const lines=[headers.join(',')];
+  recordRows.forEach((row)=>{
+    lines.push(headers.map((key)=>String(row[key])).join(','));
+  });
+  return lines.join('\n');
+}
+async function postHeightOffset(offset){
+  try{
+    const form=new URLSearchParams();
+    form.set('offset',String(clampSliderValue(offset)));
+    const response=await fetch('/api/height',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form.toString()});
+    if(!response.ok){throw new Error('http');}
+  }catch(error){
+    setText('statusMessage','Live height update failed');
+  }
+}
+let sliderTimer=null;
+if(heightSlider){
+  heightSlider.addEventListener('input',()=>{
+    setText('liveOffsetLabel',heightSlider.value);
+  });
+  heightSlider.addEventListener('change',()=>{
+    if(sliderTimer){clearTimeout(sliderTimer);}
+    sliderTimer=setTimeout(()=>postHeightOffset(heightSlider.value),40);
+  });
+}
+const startRecordBtn=document.getElementById('startRecord');
+const stopRecordBtn=document.getElementById('stopRecord');
+const clearRecordBtn=document.getElementById('clearRecord');
+const exportRecordBtn=document.getElementById('exportRecord');
+if(startRecordBtn){
+  startRecordBtn.addEventListener('click',()=>{
+    isRecording=true;
+    setText('statusMessage','Telemetry recording started in browser');
+  });
+}
+if(stopRecordBtn){
+  stopRecordBtn.addEventListener('click',()=>{
+    isRecording=false;
+    setText('statusMessage','Telemetry recording stopped');
+  });
+}
+if(clearRecordBtn){
+  clearRecordBtn.addEventListener('click',()=>{
+    recordRows=[];
+    updateRecordCount();
+    updateRecordOutput('');
+  });
+}
+if(exportRecordBtn){
+  exportRecordBtn.addEventListener('click',()=>{
+    updateRecordOutput(buildCsv());
+  });
 }
 async function refreshStatus(){
   try{
@@ -761,10 +1035,23 @@ async function refreshStatus(){
     setText('statPitch',fmt(pick(data.imu,'pitch',null),2)+' deg');
     setText('statHeight',fmt(pick(data.tuning,'current_height',null),1)+' mm');
     setText('statPitchTarget',fmt(pick(data.tuning,'current_pitch_target',null),2)+' deg');
+    setText('statActiveStep','Step '+String(pick(data.tuning,'active_step','--'))+' / '+String(pick(data.tuning,'active_offset','--')));
+    setText('liveOffsetLabel',String(clampSliderValue(pick(data.tuning,'height_offset',0))));
+    setText('sliderActiveProfile','Step '+String(pick(data.tuning,'active_step','--'))+' / offset '+String(pick(data.tuning,'active_offset','--')));
+    setText('sliderEstimatedHeight',fmt(pick(data.tuning,'current_height',null),1)+' mm');
+    if(heightSlider){heightSlider.value=String(clampSliderValue(pick(data.tuning,'height_offset',0)));}
     setText('statSerialMode',pick(data.ik,'serial_mode',false)?'SERIAL IK':'AUTO');
     setText('imuRoll',fmt(pick(data.imu,'roll',null),2)+' deg');
     setText('imuYaw',fmt(pick(data.imu,'yaw',null),2)+' deg');
     setText('imuGyroY',fmt(pick(data.imu,'gyro_y',null),2)+' deg/s');
+    setText('imuAccX',fmt(pick(data.imu,'acc_x',null),3)+' g');
+    setText('imuAccY',fmt(pick(data.imu,'acc_y',null),3)+' g');
+    setText('imuAccZ',fmt(pick(data.imu,'acc_z',null),3)+' g');
+    setText('imuGyroX',fmt(pick(data.imu,'gyro_x',null),2)+' deg/s');
+    setText('imuGyroYRaw',fmt(pick(data.imu,'gyro_y',null),2)+' deg/s');
+    setText('imuGyroZ',fmt(pick(data.imu,'gyro_z',null),2)+' deg/s');
+    setText('imuTemp',fmt(pick(data.imu,'temp_c',null),2)+' C');
+    setText('ps2Link',pick(data.ik,'ps2_connected',false)?'connected':'offline');
     setText('tuningHeightOffset',fmt(pick(data.tuning,'height_offset',null),1)+' mm');
     setText('wheelLeftTarget',fmt(pick(data.control,'wheel_left_target',null),2));
     setText('wheelRightTarget',fmt(pick(data.control,'wheel_right_target',null),2));
@@ -776,7 +1063,6 @@ async function refreshStatus(){
     setText('pidBalanceKi',fmt(pick(data.control,'balance_ki',null),4));
     setText('pidRobotKp',fmt(pick(data.control,'robot_kp',null),4));
     setText('pidSpeedLimit',String(pick(data.control,'speed_limit','--')));
-    setText('tuningInitPitch',fmt(pick(data.tuning,'init_pitch',null),2)+' deg');
     setText('tuningBalanceOffset',fmt(pick(data.tuning,'balance_offset',null),2)+' deg');
     setText('tuningLeftHeight',fmt(pick(data.tuning,'left_height',null),1)+' mm');
     setText('tuningRightHeight',fmt(pick(data.tuning,'right_height',null),1)+' mm');
@@ -787,7 +1073,37 @@ async function refreshStatus(){
     setText('ikSerialLeftY',fmt(pick(data.ik,'serial_left_y',null),1)+' mm');
     setText('ikSerialRightY',fmt(pick(data.ik,'serial_right_y',null),1)+' mm');
     setText('apiHealth','live');
-    renderPitchMap(data.pitch_map);
+    renderProfiles(data.profiles,pick(data.tuning,'active_step',-1));
+    pushChartSample(data);
+    renderCharts();
+    if(isRecording){
+      recordRows.push({
+        ms:Date.now(),
+        step:pick(data.tuning,'active_step',''),
+        offset:pick(data.tuning,'active_offset',''),
+        pitch:fmt(pick(data.imu,'pitch',null),4),
+        roll:fmt(pick(data.imu,'roll',null),4),
+        yaw:fmt(pick(data.imu,'yaw',null),4),
+        acc_x:fmt(pick(data.imu,'acc_x',null),5),
+        acc_y:fmt(pick(data.imu,'acc_y',null),5),
+        acc_z:fmt(pick(data.imu,'acc_z',null),5),
+        gyro_x:fmt(pick(data.imu,'gyro_x',null),4),
+        gyro_y:fmt(pick(data.imu,'gyro_y',null),4),
+        gyro_z:fmt(pick(data.imu,'gyro_z',null),4),
+        temp_c:fmt(pick(data.imu,'temp_c',null),3),
+        balance_point:fmt(pick(data.tuning,'current_pitch_target',null),4),
+        current_height:fmt(pick(data.tuning,'current_height',null),4),
+        vel_kp:fmt(pick(data.control,'vel_kp',null),5),
+        balance_kp:fmt(pick(data.control,'balance_kp',null),5),
+        balance_kd:fmt(pick(data.control,'balance_kd',null),5),
+        balance_ki:fmt(pick(data.control,'balance_ki',null),5),
+        robot_kp:fmt(pick(data.control,'robot_kp',null),5),
+        speed_limit:pick(data.control,'speed_limit',''),
+        wheel_left_target:fmt(pick(data.control,'wheel_left_target',null),4),
+        wheel_right_target:fmt(pick(data.control,'wheel_right_target',null),4)
+      });
+      updateRecordCount();
+    }
   }catch(error){
     setText('apiHealth','offline');
   }

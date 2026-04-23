@@ -6,19 +6,20 @@ namespace
 {
 constexpr float kMinLegHeight = 130.0f;
 constexpr float kMaxLegHeight = 380.0f;
-constexpr float kMinPitchTarget = -15.0f;
-constexpr float kMaxPitchTarget = 15.0f;
-
-DeviceTuningConfig g_config = {
-    0.0f,
-    300.0f,
-    300.0f,
-    {
-        {130.0f, 0.0f},
-        {255.0f, 0.0f},
-        {380.0f, 0.0f},
-    },
-};
+constexpr float kMinBalancePoint = -15.0f;
+constexpr float kMaxBalancePoint = 15.0f;
+constexpr float kMinVelKp = -2.0f;
+constexpr float kMaxVelKp = 2.0f;
+constexpr float kMinBalanceKp = -5.0f;
+constexpr float kMaxBalanceKp = 5.0f;
+constexpr float kMinBalanceKd = -2.0f;
+constexpr float kMaxBalanceKd = 2.0f;
+constexpr float kMinBalanceKi = -1.0f;
+constexpr float kMaxBalanceKi = 1.0f;
+constexpr float kMinRobotKp = -20.0f;
+constexpr float kMaxRobotKp = 20.0f;
+constexpr int kMinSpeedLimit = 1;
+constexpr int kMaxSpeedLimit = 20;
 
 float clampFloat(float value, float minValue, float maxValue)
 {
@@ -35,63 +36,83 @@ float clampFloat(float value, float minValue, float maxValue)
   return value;
 }
 
-void normalizePitchMap(HeightPitchPoint *points, int count)
+int clampInt(int value, int minValue, int maxValue)
 {
-  for (int i = 0; i < count; ++i)
+  if (value < minValue)
   {
-    points[i].height = clampFloat(points[i].height, kMinLegHeight, kMaxLegHeight);
-    points[i].pitch = clampFloat(points[i].pitch, kMinPitchTarget, kMaxPitchTarget);
+    return minValue;
   }
 
-  for (int i = 0; i < count - 1; ++i)
+  if (value > maxValue)
   {
-    for (int j = i + 1; j < count; ++j)
-    {
-      if (points[j].height < points[i].height)
-      {
-        const HeightPitchPoint temp = points[i];
-        points[i] = points[j];
-        points[j] = temp;
-      }
-    }
+    return maxValue;
   }
+
+  return value;
 }
 
-float interpolatePitchMap(const HeightPitchPoint *points, int count, float height)
+DeviceTuningConfig buildDefaultConfig()
 {
-  if (count <= 0)
+  DeviceTuningConfig config = {};
+  config.leftHeight = 300.0f;
+  config.rightHeight = 300.0f;
+
+  for (int i = 0; i < kHeightProfileCount; ++i)
   {
-    return 0.0f;
+    const float t = static_cast<float>(i) / static_cast<float>(kHeightProfileCount - 1);
+    config.profiles[i].offset = i * kHeightProfileStep;
+    config.profiles[i].balancePoint = -0.5f + 0.5f * t;
+    config.profiles[i].velKp = -0.55f + 0.01f * t;
+    config.profiles[i].balanceKp = -0.183f + 0.025f * t;
+    config.profiles[i].balanceKd = 0.055f - 0.013f * t;
+    config.profiles[i].balanceKi = -0.003f - 0.0025f * t;
+    config.profiles[i].robotKp = 4.0f + 2.2f * t;
+    config.profiles[i].speedLimit = (i <= 8) ? 5 : 3;
   }
 
-  if (height <= points[0].height)
-  {
-    return points[0].pitch;
-  }
-
-  for (int i = 1; i < count; ++i)
-  {
-    if (height <= points[i].height)
-    {
-      const float span = points[i].height - points[i - 1].height;
-      if (span <= 0.001f)
-      {
-        return points[i].pitch;
-      }
-
-      const float t = (height - points[i - 1].height) / span;
-      return points[i - 1].pitch + t * (points[i].pitch - points[i - 1].pitch);
-    }
-  }
-
-  return points[count - 1].pitch;
+  return config;
 }
+
+DeviceTuningConfig g_config = buildDefaultConfig();
+
+void normalizeProfile(HeightProfile &profile, int index)
+{
+  profile.offset = index * kHeightProfileStep;
+  profile.balancePoint = clampFloat(profile.balancePoint, kMinBalancePoint, kMaxBalancePoint);
+  profile.velKp = clampFloat(profile.velKp, kMinVelKp, kMaxVelKp);
+  profile.balanceKp = clampFloat(profile.balanceKp, kMinBalanceKp, kMaxBalanceKp);
+  profile.balanceKd = clampFloat(profile.balanceKd, kMinBalanceKd, kMaxBalanceKd);
+  profile.balanceKi = clampFloat(profile.balanceKi, kMinBalanceKi, kMaxBalanceKi);
+  profile.robotKp = clampFloat(profile.robotKp, kMinRobotKp, kMaxRobotKp);
+  profile.speedLimit = clampInt(profile.speedLimit, kMinSpeedLimit, kMaxSpeedLimit);
+}
+
+void normalizeConfig(DeviceTuningConfig &config)
+{
+  config.leftHeight = clampFloat(config.leftHeight, kMinLegHeight, kMaxLegHeight);
+  config.rightHeight = clampFloat(config.rightHeight, kMinLegHeight, kMaxLegHeight);
+
+  for (int i = 0; i < kHeightProfileCount; ++i)
+  {
+    normalizeProfile(config.profiles[i], i);
+  }
+}
+}
+
+int clampHeightOffset(int offset)
+{
+  return clampInt(offset, 0, (kHeightProfileCount - 1) * kHeightProfileStep);
+}
+
+int getHeightProfileIndexForOffset(int offset)
+{
+  const int clampedOffset = clampHeightOffset(offset);
+  return clampInt((clampedOffset + kHeightProfileStep / 2) / kHeightProfileStep, 0, kHeightProfileCount - 1);
 }
 
 DeviceTuningConfig getDeviceTuningConfig()
 {
   DeviceTuningConfig config = g_config;
-  config.initPitch = init_pitch;
   config.leftHeight = leftY;
   config.rightHeight = rightY;
   return config;
@@ -100,12 +121,8 @@ DeviceTuningConfig getDeviceTuningConfig()
 void applyDeviceTuningConfig(const DeviceTuningConfig &config)
 {
   g_config = config;
-  g_config.initPitch = clampFloat(g_config.initPitch, kMinPitchTarget, kMaxPitchTarget);
-  g_config.leftHeight = clampFloat(g_config.leftHeight, kMinLegHeight, kMaxLegHeight);
-  g_config.rightHeight = clampFloat(g_config.rightHeight, kMinLegHeight, kMaxLegHeight);
-  normalizePitchMap(g_config.pitchMap, 3);
+  normalizeConfig(g_config);
 
-  init_pitch = g_config.initPitch;
   leftY = g_config.leftHeight;
   rightY = g_config.rightHeight;
 
@@ -118,16 +135,27 @@ void applyDeviceTuningConfig(const DeviceTuningConfig &config)
   updateBalanceOffsetByCurrentHeight();
 }
 
-float getPitchMapValueForHeight(float height)
+HeightProfile getHeightProfileByIndex(int index)
 {
-  return interpolatePitchMap(g_config.pitchMap, 3, height);
+  const int safeIndex = clampInt(index, 0, kHeightProfileCount - 1);
+  return g_config.profiles[safeIndex];
+}
+
+HeightProfile getHeightProfileForOffset(int offset)
+{
+  return getHeightProfileByIndex(getHeightProfileIndexForOffset(offset));
+}
+
+HeightProfile getCurrentHeightProfile()
+{
+  return getHeightProfileForOffset(ZeparamremoteValue);
 }
 
 float getCurrentHeightForPitchControl()
 {
   float leftHeight = leftY;
   float rightHeight = rightY;
-  float heightOffset = static_cast<float>(ZeparamremoteValue);
+  float heightOffset = static_cast<float>(clampHeightOffset(ZeparamremoteValue));
 
   if (serialFootPoseMode)
   {
@@ -142,7 +170,7 @@ float getCurrentHeightForPitchControl()
 
 float getCurrentPitchTarget()
 {
-  return init_pitch + getPitchMapValueForHeight(getCurrentHeightForPitchControl());
+  return getCurrentHeightProfile().balancePoint;
 }
 
 void updateBalanceOffsetByCurrentHeight()
